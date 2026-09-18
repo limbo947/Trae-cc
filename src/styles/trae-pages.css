@@ -1,0 +1,501 @@
+/* ═══════════════════════════════════════════════════════════════
+   trae-pages.css — 页面级重塑（仪表盘 / 设置 / 关于 / 错误弹窗）
+   ------------------------------------------------------------------
+   从 trae-components.css 拆出以控制单文件规模。覆盖 App.css 与
+   ErrorModal.css 中对应历史规则，颜色只引用 token 变量。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 仪表盘 / 统计卡片：渐变玻璃 → 平面统计卡 ───────────────── */
+.dashboard {
+  padding: 16px 24px 24px;
+}
+
+.welcome-section h1 {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.welcome-section p {
+  font-size: 12px;
+}
+
+.quick-stat-value {
+  font-size: 22px;
+}
+
+.quick-stat-label {
+  font-size: 11px;
+}
+
+.stat-card {
+  padding: 16px;
+  border-radius: var(--radius-8);
+  background: var(--bg-card);
+  border: 1px solid var(--border-neutral-l1);
+  color: var(--text-default);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.stat-card:hover {
+  transform: none;
+  border-color: var(--border-neutral-l3);
+  box-shadow: none;
+}
+
+.stat-card::before {
+  display: none;
+}
+
+.stat-card.gradient-purple,
+.stat-card.gradient-blue,
+.stat-card.gradient-green,
+.stat-card.gradient-orange {
+  background: var(--bg-card);
+}
+
+.stat-card-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+.stat-card-value {
+  font-size: 22px;
+  color: var(--text-default);
+}
+
+.stat-card-change {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  opacity: 1;
+}
+
+.stat-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-6);
+  background: var(--bg-overlay-l3);
+}
+
+.stat-card-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.stat-card.gradient-purple .stat-card-icon {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.stat-card.gradient-blue .stat-card-icon {
+  background: var(--status-primary-surface-l1);
+  color: var(--status-primary-default);
+}
+
+.stat-card.gradient-green .stat-card-icon {
+  background: var(--status-success-surface-l1);
+  color: var(--status-success-default);
+}
+
+.stat-card.gradient-orange .stat-card-icon {
+  background: var(--status-warning-surface-l1);
+  color: var(--status-warning-default);
+}
+
+/* 图表卡 */
+.chart-card,
+.dashboard-empty,
+.widget-card {
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.widget-card:hover {
+  transform: none;
+  border-color: var(--border-neutral-l3);
+}
+
+.chart-header h3 {
+  font-size: 13px;
+}
+
+.chart-badge {
+  padding: 2px 8px;
+  border-radius: var(--radius-2);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.chart-tab {
+  padding: 4px 10px;
+  border-radius: var(--radius-2);
+  background: transparent;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chart-tab:hover {
+  background: var(--bg-overlay-l1);
+}
+
+.chart-tab.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.pie-value {
+  font-size: 20px;
+}
+
+.legend-item {
+  font-size: 11px;
+}
+
+.chart-empty,
+.chart-empty p {
+  font-size: 12px;
+}
+
+.dashboard-empty {
+  padding: 40px 20px;
+}
+
+/* ── 设置页 ─────────────────────────────────────────────────── */
+.settings-page {
+  padding: 16px 24px;
+}
+
+.settings-section {
+  padding: 16px;
+  margin-bottom: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  box-shadow: none;
+}
+
+.settings-section h3 {
+  font-size: 13px;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-neutral-l1);
+}
+
+.setting-item {
+  padding: 12px 0;
+}
+
+.setting-label {
+  font-size: 13px;
+}
+
+.setting-desc {
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.setting-help {
+  border-radius: var(--radius-4);
+}
+
+/* 新开关 pill-toggle */
+.pill-toggle {
+  width: 40px;
+  height: 22px;
+  border: 1px solid var(--border-neutral-l2);
+  background: var(--bg-overlay-l3);
+  box-shadow: none;
+}
+
+.pill-toggle .pill-thumb {
+  width: 16px;
+  height: 16px;
+  top: 2px;
+  left: 2px;
+  background: var(--thumb-off);
+  box-shadow: none;
+}
+
+.pill-toggle.on {
+  background: var(--bg-brand);
+  border-color: var(--bg-brand);
+  box-shadow: none;
+}
+
+.pill-toggle.on .pill-thumb {
+  transform: translateX(18px);
+  background: var(--text-onbrand);
+}
+
+/* 旧开关 toggle */
+.toggle-slider {
+  background-color: var(--bg-overlay-l4);
+}
+
+.toggle-slider:before {
+  background-color: var(--thumb-off);
+}
+
+.toggle input:checked + .toggle-slider {
+  background-color: var(--bg-brand);
+}
+
+.toggle input:checked + .toggle-slider:before {
+  background-color: var(--text-onbrand);
+}
+
+/* 机器码卡片 */
+.machine-id-card,
+.machine-id-card.trae-card {
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+}
+
+.machine-id-icon,
+.machine-id-icon.trae-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-6);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.machine-id-title > span:first-child {
+  font-size: 14px;
+}
+
+.machine-id-value {
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+}
+
+.machine-id-value code {
+  font-size: 13px;
+}
+
+.machine-id-tip {
+  background: var(--bg-overlay-l1);
+  border-radius: var(--radius-6);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.machine-id-tip.warning {
+  background: var(--status-warning-surface-l1);
+}
+
+/* ── 关于页 ─────────────────────────────────────────────────── */
+.about-page {
+  padding: 16px 24px;
+  background: var(--bg-base-default);
+}
+
+.about-card,
+.about-update-section {
+  padding: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  text-align: left;
+}
+
+.about-header .about-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-8);
+  box-shadow: none;
+}
+
+.about-header .about-logo:hover {
+  transform: none;
+}
+
+.title-row .about-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-default);
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  -webkit-text-fill-color: currentColor;
+}
+
+.title-row .version {
+  padding: 1px 8px;
+  border-radius: var(--radius-2);
+  background: var(--bg-overlay-l1);
+  border: 1px solid var(--border-neutral-l1);
+  font-size: 10px;
+}
+
+.about-intro-section {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  box-shadow: none;
+}
+
+.about-desc {
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.about-desc .original-link:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.github-link,
+.info-item {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  box-shadow: none;
+}
+
+.feature-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  box-shadow: none;
+}
+
+.feature-card:hover {
+  transform: none;
+  border-color: var(--border-neutral-l3);
+  box-shadow: none;
+}
+
+.feature-icon-wrapper {
+  background: var(--accent-bg);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.tech-tag {
+  background: var(--bg-overlay-l1);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-2);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.register-progress-bar {
+  background: var(--bg-overlay-l3);
+  border-radius: var(--radius-2);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.register-progress-fill {
+  background: var(--bg-brand);
+  box-shadow: none;
+}
+
+.register-progress-fill::after {
+  display: none;
+}
+
+.register-progress-container.complete .register-progress-fill {
+  background: var(--status-success-default);
+  box-shadow: none;
+}
+
+.about-update-icon {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: var(--radius-6);
+}
+
+.about-update-title {
+  font-size: 14px;
+}
+
+.about-update-desc,
+.about-update-info {
+  font-size: 12px;
+}
+
+/* ── ErrorModal 组件（ErrorModal.css 硬编码浅色，整组覆盖） ─── */
+.error-modal-content {
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  box-shadow: var(--shadow-lg);
+  padding: 24px;
+}
+
+.error-modal-close {
+  border-radius: var(--radius-4);
+  color: var(--text-tertiary);
+}
+
+.error-modal-close:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.error-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-8);
+}
+
+.error-icon.limit {
+  background: var(--status-warning-surface-l1);
+  color: var(--status-warning-default);
+}
+
+.error-icon.empty {
+  background: var(--status-alert-surface-l1);
+  color: var(--status-alert-default);
+}
+
+.error-icon.expired {
+  background: var(--status-primary-surface-l1);
+  color: var(--status-primary-default);
+}
+
+.error-icon.error {
+  background: var(--status-error-surface-l1);
+  color: var(--status-error-default);
+}
+
+.error-icon.success {
+  background: var(--status-success-surface-l1);
+  color: var(--status-success-default);
+}
+
+.error-modal-title {
+  font-size: 16px;
+  color: var(--text-default);
+}
+
+.error-modal-message {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.error-modal-description {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.error-modal-btn {
+  min-width: 0;
+  padding: 0 16px;
+}

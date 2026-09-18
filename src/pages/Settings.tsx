@@ -158,7 +158,7 @@ export function Settings({
           name: "Trae IDE",
           extensions: ["exe"]
         }],
-        title: "选择 Trae.exe 文件"
+        title: "选择 Trae CN.exe 文件"
       });
 
       if (selected) {
@@ -290,7 +290,7 @@ export function Settings({
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginLeft: '16px', marginTop: '4px' }}>
                 Windows 用户还需手动删除：C:\Users\[用户名]\.trae\ 等文件夹
               </div>
-              <div style={{ fontSize: '13px', color: '#ff4d4f', marginLeft: '16px', marginTop: '8px', fontWeight: 500 }}>
+              <div style={{ fontSize: '13px', color: 'var(--status-error-default)', marginLeft: '16px', marginTop: '8px', fontWeight: 500 }}>
                 提示：免费账户达到上限，请升级至专业版，手动点击清除登录状态，并查看清除后的提示
               </div>
               <div style={{ fontSize: '12px', color: 'var(--warning)', marginLeft: '16px', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -540,22 +540,22 @@ export function Settings({
           left: 0,
           right: 0,
           bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          backgroundColor: 'var(--scrim)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           zIndex: 9999,
         }} onClick={() => setShowClearConfirm(false)}>
           <div style={{
-            backgroundColor: 'var(--bg-card)',
-            borderRadius: '12px',
+            backgroundColor: 'var(--bg-base-secondary)',
+            borderRadius: 'var(--radius-8)',
             padding: '24px',
             maxWidth: '480px',
             width: '90%',
             maxHeight: '80vh',
             overflow: 'auto',
-            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
-            border: '1px solid var(--border)',
+            boxShadow: 'var(--shadow-lg)',
+            border: '1px solid var(--border-neutral-l2)',
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
               <div style={{

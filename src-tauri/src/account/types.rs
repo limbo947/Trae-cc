@@ -23,9 +23,43 @@ pub struct Account {
     /// 账号关联的机器码
     #[serde(default)]
     pub machine_id: Option<String>,
+    /// 签到设备号（`X-Device-Id`），与 `machine_id` 彻底解耦：重置设备号不碰 IDE 机器身份
+    /// 为什么独立成字段：machine_id 同是 machineid 文件值与注册表 MachineGuid，
+    /// 复用会让「换签到设备号」连带改写 IDE 机器身份，无法单独旋转
+    #[serde(default)]
+    pub device_id: Option<String>,
+    /// 最近一次签到成功的日期（本地日期 YYYY-MM-DD）
+    /// 为什么落盘：方案B 自动签到靠它判断「今日是否已签」，避免一天多次开机重复签到
+    #[serde(default)]
+    pub last_checkin_date: Option<String>,
+    /// 签到冷却（跨批次记忆）：批次内失败不落盘，全部轮次结束后统一写入
+    #[serde(default)]
+    pub checkin_cooldown: Option<CheckinCooldown>,
+}
+
+/// 签到冷却状态
+///
+/// 为什么用嵌套单字段而不是平铺两个 `Option`：平铺会出现「until 有值但 reason 为空」的
+/// 非法中间态，判定与渲染都得额外防御；嵌套后「有冷却」必然带原因码。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckinCooldown {
+    /// 截止时刻（UTC 秒）；`i64::MAX` 是「需人工介入」哨兵，无时钟语义
+    pub until: i64,
+    /// 机器可读码：auth_expired / rate_limited / risk_control / server_error
+    pub reason: String,
 }
 
 impl Account {
+    /// 今日是否已签到（本地日期口径）
+    ///
+    /// 为什么由后端判定而不是把 `last_checkin_date` 交给前端比较：签到流程写入时用的是
+    /// `chrono::Local` 的本地日期，前端若用 `toISOString()` 之类的 UTC 口径重算，
+    /// 中国时区下凌晨 0–8 点会得出不同的「今天」，徽标就会与实际状态矛盾。
+    pub fn is_checked_in_today(&self) -> bool {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        self.last_checkin_date.as_deref() == Some(today.as_str())
+    }
+
     pub fn new(
         name: String,
         email: String,
@@ -34,6 +68,12 @@ impl Account {
         tenant_id: String,
     ) -> Self {
         let now = chrono::Utc::now().timestamp();
+        // 有 user_id 就立即派生落盘（派生一次即固定）；为空则留 None，交给启动回填/解析回退
+        let device_id = if user_id.trim().is_empty() {
+            None
+        } else {
+            Some(crate::api::device_id::derive_device_id(&user_id))
+        };
         Self {
             id: uuid_simple(),
             name,
@@ -51,6 +91,9 @@ impl Account {
             updated_at: now,
             is_active: true,
             machine_id: Some(Uuid::new_v4().to_string()),
+            device_id,
+            last_checkin_date: None,
+            checkin_cooldown: None,
         }
     }
 }
@@ -88,6 +131,8 @@ pub struct AccountBrief {
     pub machine_id: Option<String>,
     /// 是否是当前 Trae IDE 正在使用的账号
     pub is_current: bool,
+    /// 今日是否已签到（后端用本地日期口径判定，避免前端 UTC 口径重算出错）
+    pub checked_in_today: bool,
 }
 
 impl From<&Account> for AccountBrief {
@@ -102,6 +147,7 @@ impl From<&Account> for AccountBrief {
             created_at: account.created_at,
             machine_id: account.machine_id.clone(),
             is_current: false, // 默认为 false，由 AccountManager 设置
+            checked_in_today: account.is_checked_in_today(),
         }
     }
 }
@@ -119,6 +165,7 @@ impl AccountBrief {
             created_at: account.created_at,
             machine_id: account.machine_id.clone(),
             is_current,
+            checked_in_today: account.is_checked_in_today(),
         }
     }
 }

@@ -6,10 +6,12 @@ mod account;
 mod autostart;
 mod machine;
 mod privacy;
+mod device_reset;
 // mod tempmail_client; // 已禁用，依赖外部 exe 文件
 // mod quick_register_simple; // 已禁用快速注册功能
 mod browser_auto_login;
 mod logger;
+mod tc_crypto;
 mod custom_tempmail;
 mod quick_register_backend;
 
@@ -31,7 +33,6 @@ use warp::Filter;
 use account::{AccountBrief, AccountManager, Account};
 use api::{TraeApiClient, UsageSummary, UsageQueryResponse, UserStatisticResult};
 // use quick_register_simple::wait_for_request_cookies; // 已禁用快速注册功能
-use anyhow::anyhow;
 
 #[cfg(target_os = "windows")]
 fn hide_console_window() {
@@ -578,15 +579,15 @@ fn build_browser_login_script(port: u16) -> String {
     loginTriggered = true;
   };
   const tryFetch = async () => {
+    // 仅适配国内版：CN 版统一 API 域名
     const endpoints = [
-      "https://api-sg-central.trae.ai/cloudide/api/v3/common/GetUserToken",
-      "https://api-us-east.trae.ai/cloudide/api/v3/common/GetUserToken"
+      "https://api.trae.com.cn/cloudide/api/v3/common/GetUserToken"
     ];
     const headers = {
       "content-type": "application/json",
       "accept": "application/json, text/plain, */*",
-      "origin": "https://www.trae.ai",
-      "referer": "https://www.trae.ai/"
+      "origin": "https://www.trae.com.cn",
+      "referer": "https://www.trae.com.cn/"
     };
     for (const endpoint of endpoints) {
       try {
@@ -730,14 +731,13 @@ fn build_browser_login_script(port: u16) -> String {
 fn collect_trae_cookies(webview: &WebviewWindow, extra_url: Option<&str>) -> String {
     let mut cookie_map: HashMap<String, String> = HashMap::new();
     let mut urls = vec![
-        "https://www.trae.ai/".to_string(),
-        "https://api-sg-central.trae.ai/".to_string(),
-        "https://ug-normal.trae.ai/".to_string(),
+        "https://www.trae.com.cn/".to_string(),
+        "https://api.trae.com.cn/".to_string(),
     ];
     
     if let Some(url) = extra_url {
         if !url.is_empty() {
-             // 尝试提取 base url (e.g. https://api-us-east.trae.ai)
+             // 尝试提取 base url (e.g. https://api.trae.com.cn)
              if let Ok(parsed) = Url::parse(url) {
                  let base = format!("{}://{}/", parsed.scheme(), parsed.host_str().unwrap_or_default());
                  urls.push(base);
@@ -767,7 +767,8 @@ fn collect_trae_cookies(webview: &WebviewWindow, extra_url: Option<&str>) -> Str
         && !cookies.contains("store-idc=")
         && !cookies.contains("trae-target-idc=")
     {
-        cookies.push_str("; store-idc=alisg");
+        // 国内版 IDC 标识（推断值，仅在 cookie 缺失时补全）
+        cookies.push_str("; store-idc=alicn");
     }
     cookies
 }
@@ -847,8 +848,8 @@ async fn start_browser_login(app: AppHandle, state: State<'_, AppState>) -> Resu
         return Err(anyhow::anyhow!("无法关闭已存在的登录窗口，请重启应用后重试").into());
     }
 
-    let webview = WebviewWindowBuilder::new(&app, "trae-login", WebviewUrl::External("https://www.trae.ai/login".parse().unwrap()))
-        .title("Trae 登录")
+    let webview = WebviewWindowBuilder::new(&app, "trae-login", WebviewUrl::External("https://www.trae.com.cn/login".parse().unwrap()))
+        .title("Trae CN 登录")
         .inner_size(1000.0, 720.0)
         .initialization_script(&script_init)
         .build()
@@ -886,7 +887,7 @@ async fn finish_browser_login(state: State<'_, AppState>) -> Result<Account> {
         browser_login.take().ok_or_else(|| anyhow::anyhow!("浏览器登录未开始"))?
     };
 
-    let (token, url) = tokio::select! {
+    let (token, _url) = tokio::select! {
         res = session.receiver => {
             match res {
                 Ok(token) => token,
@@ -1063,61 +1064,64 @@ async fn switch_account(account_id: String, force: Option<bool>, state: State<'_
 
     let settings = state.settings.lock().await.clone();
     if settings.privacy_auto_enable {
-        log::info!("Waiting for Trae IDE to start before writing privacy settings");
-        let db_path = match machine::get_trae_state_db_path() {
-            Ok(path) => path,
+        match machine::get_trae_state_db_path() {
+            Ok(db_path) => {
+                // 后台执行完整隐私流程：全新启动的 Trae 实测需 70 秒以上才生成 state.vscdb，
+                // 前台等待会让切换命令长时间不返回（曾导致前端转圈 30 秒、用户重复点击）
+                tokio::spawn(async move {
+                    let db_path_clone = db_path.clone();
+                    let start_result = tokio::task::spawn_blocking(move || {
+                        if let Err(e) = machine::open_trae() {
+                            log::error!("启动 Trae IDE 失败: {}", e);
+                            return Err(e);
+                        }
+                        let start = std::time::Instant::now();
+                        let timeout = std::time::Duration::from_secs(120);
+                        while !db_path_clone.exists() {
+                            if start.elapsed() > timeout {
+                                return Err(anyhow::anyhow!("等待 Trae 数据库超时"));
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                        }
+                        Ok(())
+                    }).await;
+
+                    match start_result {
+                        Ok(Ok(())) => {
+                            let result = tokio::task::spawn_blocking(move || {
+                                privacy::enable_privacy_mode_at_path_with_restart(db_path, || {
+                                    machine::kill_trae()?;
+                                    machine::open_trae()
+                                })
+                            }).await;
+                            match result {
+                                Ok(Ok(())) => log::info!("隐私模式已写入并重启 Trae"),
+                                Ok(Err(e)) => log::error!("写入隐私模式失败: {}", e),
+                                Err(e) => log::error!("隐私任务执行异常: {}", e),
+                            }
+                        }
+                        Ok(Err(e)) => log::error!("等待 Trae 数据库失败: {}", e),
+                        Err(e) => log::error!("启动任务异常: {}", e),
+                    }
+                });
+            }
             Err(err) => {
                 log::error!("Failed to find Trae database: {}", err);
                 // 即使查找数据库失败，也尝试启动 Trae
-                let _ = tokio::task::spawn_blocking(|| {
-                    let _ = machine::open_trae();
-                }).await;
-                return Ok(());
+                tokio::spawn(async move {
+                    let _ = tokio::task::spawn_blocking(|| {
+                        let _ = machine::open_trae();
+                    }).await;
+                });
             }
-        };
-        
-        // 先启动 Trae，等待数据库文件生成
-        let db_path_clone = db_path.clone();
-        let start_result = tokio::task::spawn_blocking(move || {
-            // 启动 Trae
-            if let Err(e) = machine::open_trae() {
-                println!("[ERROR] 启动 Trae IDE 失败: {}", e);
-                return Err(e);
-            }
-            
-            // 等待数据库文件存在（最多等待 30 秒）
-            let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_secs(30);
-            while !db_path_clone.exists() {
-                if start.elapsed() > timeout {
-                    return Err(anyhow::anyhow!("等待 Trae 数据库超时"));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-            
-            Ok(())
-        }).await;
-        
-        match start_result {
-            Ok(Ok(())) => {
-                // Trae 启动成功，数据库文件已生成，现在写入隐私模式
-                let result = tokio::task::spawn_blocking(move || {
-                    privacy::enable_privacy_mode_at_path_with_restart(db_path, || {
-                        machine::kill_trae()?;
-                        machine::open_trae()
-                    })
-                }).await;
-
-                let _ = result;
-            }
-            Ok(Err(_)) => {}
-            Err(_) => {}
         }
     } else {
-        // 隐私模式未启用，直接启动 Trae
-        let _ = tokio::task::spawn_blocking(|| {
-            let _ = machine::open_trae();
-        }).await;
+        // 隐私模式未启用，后台启动 Trae（不阻塞切换命令返回）
+        tokio::spawn(async move {
+            let _ = tokio::task::spawn_blocking(|| {
+                let _ = machine::open_trae();
+            }).await;
+        });
     }
 
     Ok(())
@@ -1424,8 +1428,8 @@ async fn open_pricing(account_id: String, app: AppHandle, state: State<'_, AppSt
         r#"
 (() => {{
   try {{
-    // 只在 trae.ai 域名下执行
-    if (!location.hostname.endsWith('trae.ai')) return;
+    // 只在 trae.com.cn 域名下执行（国内版）
+    if (!location.hostname.endsWith('trae.com.cn')) return;
 
     // 如果已经在 pricing 页面且已注入过，就不再执行
     if (location.href.includes('/pricing') && sessionStorage.getItem('trae_auth_injected')) return;
@@ -1441,8 +1445,8 @@ async fn open_pricing(account_id: String, app: AppHandle, state: State<'_, AppSt
             const cookie = oldCookies[i];
             const eqPos = cookie.indexOf("=");
             const name = eqPos > -1 ? cookie.substr(0, eqPos).trim() : cookie.trim();
-            document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.trae.ai";
-            document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=www.trae.ai";
+            document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.trae.com.cn";
+            document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=www.trae.com.cn";
             document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
         }}
     }} catch (e) {{
@@ -1460,11 +1464,11 @@ async fn open_pricing(account_id: String, app: AppHandle, state: State<'_, AppSt
       const value = kv.slice(idx + 1);
       if (seen.has(name)) continue;
       seen.add(name);
-      document.cookie = `${{name}}=${{value}}; path=/; domain=.trae.ai; secure; samesite=lax`;
+      document.cookie = `${{name}}=${{value}}; path=/; domain=.trae.com.cn; secure; samesite=lax`;
     }}
     // 补全 IDC cookie
     if (!raw.includes('store-idc=') && !raw.includes('trae-target-idc=')) {{
-      document.cookie = `store-idc=alisg; path=/; domain=.trae.ai; secure; samesite=lax`;
+      document.cookie = `store-idc=alicn; path=/; domain=.trae.com.cn; secure; samesite=lax`;
     }}
     
     // 3. 标记并跳转
@@ -1472,7 +1476,7 @@ async fn open_pricing(account_id: String, app: AppHandle, state: State<'_, AppSt
     
     if (!location.href.includes('/pricing')) {{
         console.log('[pricing] Redirecting to pricing...');
-        window.location.href = "https://www.trae.ai/pricing";
+        window.location.href = "https://www.trae.com.cn/pricing";
     }} else {{
         console.log('[pricing] Reloading to apply cookies...');
         location.reload();
@@ -1506,7 +1510,7 @@ async fn open_pricing(account_id: String, app: AppHandle, state: State<'_, AppSt
 
     // 先导航到一个轻量页(404)来建立域上下文并执行注入，然后再由脚本跳转到 pricing
     // 这样可以确保 Cookie 在请求 pricing 之前就已经准备好
-    let _ = webview.navigate(Url::parse("https://www.trae.ai/404_auth_init").unwrap());
+    let _ = webview.navigate(Url::parse("https://www.trae.com.cn/404_auth_init").unwrap());
     let _ = webview.set_focus();
     Ok(())
 }
@@ -1518,22 +1522,83 @@ async fn get_user_statistics(account_id: String, state: State<'_, AppState>) -> 
     manager.get_account_statistics(&account_id).await.map_err(ApiError::from)
 }
 
+/// 单账号签到（手动触发，右键菜单）
+#[tauri::command]
+async fn checkin_account(account_id: String, state: State<'_, AppState>) -> Result<api::checkin::CheckinResult> {
+    api::checkin::checkin_one_account(&state.account_manager, &account_id)
+        .await
+        .map_err(ApiError::from)
+}
+
+/// 全部账号签到（手动触发，工具栏按钮）
+#[tauri::command]
+async fn checkin_all_accounts(state: State<'_, AppState>) -> Result<Vec<api::checkin::CheckinResult>> {
+    api::checkin::checkin_all(&state.account_manager)
+        .await
+        .map_err(ApiError::from)
+}
+
+/// 自动签到（方案B）：只处理「今日未签到」的账号，启动时静默调用
+#[tauri::command]
+async fn auto_checkin(state: State<'_, AppState>) -> Result<Vec<api::checkin::CheckinResult>> {
+    api::checkin::auto_checkin_pending(&state.account_manager)
+        .await
+        .map_err(ApiError::from)
+}
+
+/// 重置单账号签到设备号（9095「本设备今日已签到」的自救手段）
+///
+/// 为什么也要走 `try_acquire`：批次签到进行中执行重置，批次末尾的 `apply_checkin_outcomes`
+/// 会用重置前收集的旧日期/旧冷却写回、覆盖重置效果；互斥后不存在这个窗口。
+/// 红线提醒：重置会清 `last_checkin_date`，但签到流程强制「claim 前先查 status」，
+/// 今日已真签到成功的账号重试会被短路为 Already，不会重复获得积分。
+#[tauri::command]
+async fn reset_account_device_id(account_id: String, state: State<'_, AppState>) -> Result<()> {
+    let _guard = api::checkin_guard::try_acquire()
+        .ok_or_else(|| ApiError::from(anyhow::anyhow!("签到进行中，请稍候再试")))?;
+
+    let new_device_id = api::device_id::random_device_id();
+    let mut manager = state.account_manager.lock().await;
+    manager
+        .reset_account_device_id(&account_id, new_device_id)
+        .map_err(ApiError::from)
+}
+
 async fn handle_silent_start() -> anyhow::Result<()> {
-    let mut manager = AccountManager::new()?;
-    
+    let manager = Mutex::new(AccountManager::new()?);
+
     // 1. Refresh all accounts
-    let account_ids: Vec<String> = manager.get_accounts().into_iter().map(|a| a.id).collect();
+    let account_ids: Vec<String> = {
+        let guard = manager.lock().await;
+        guard.get_accounts().into_iter().map(|a| a.id).collect()
+    };
     for id in account_ids {
-        let _ = manager.refresh_token(&id).await;
+        let _ = manager.lock().await.refresh_token(&id).await;
     }
 
-    // 2. Sync with Trae IDE if it's not running
+    // 2. 自动签到（方案B）：只处理今日未签到的账号，静默执行，失败不阻断启动流程
+    match api::checkin::auto_checkin_pending(&manager).await {
+        Ok(results) if !results.is_empty() => {
+            log::info!("静默启动自动签到完成，共处理 {} 个账号", results.len());
+        }
+        Ok(_) => {}
+        Err(e) => log::warn!("静默启动自动签到失败: {}", e),
+    }
+
+    // 3. Sync with Trae IDE if it's not running
     if !machine::is_trae_running() {
-        let accounts = manager.get_accounts();
+        let accounts = {
+            let guard = manager.lock().await;
+            guard.get_accounts()
+        };
         if let Some(current) = accounts.iter().find(|a| a.is_current) {
-             if let Ok(account) = manager.get_account(&current.id) {
+            let account = {
+                let guard = manager.lock().await;
+                guard.get_account(&current.id).ok()
+            };
+            if let Some(account) = account {
                 if let Some(token) = account.jwt_token {
-                     let login_info = machine::TraeLoginInfo {
+                    let login_info = machine::TraeLoginInfo {
                         token,
                         refresh_token: None,
                         user_id: account.user_id,
@@ -1545,7 +1610,7 @@ async fn handle_silent_start() -> anyhow::Result<()> {
                     };
                     let _ = machine::write_trae_login_info(&login_info);
                 }
-             }
+            }
         }
     }
 
@@ -1649,6 +1714,10 @@ pub fn run() {
             set_trae_path,
             scan_trae_path,
             get_user_statistics,
+            checkin_account,
+            checkin_all_accounts,
+            auto_checkin,
+            reset_account_device_id,
             open_pricing,
             check_update,
             install_update,

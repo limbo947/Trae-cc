@@ -210,7 +210,7 @@ export function UsageEvents({ accountId, onError }: UsageEventsProps) {
                   <td>{event.amount_float}</td>
                   <td>
                     {event.extra_info.input_token + event.extra_info.output_token}
-                    <span style={{ fontSize: '12px', color: '#94a3b8', marginLeft: '4px' }}>
+                    <span style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginLeft: '4px' }}>
                       ({event.extra_info.input_token}↑ {event.extra_info.output_token}↓)
                     </span>
                   </td>
@@ -221,7 +221,7 @@ export function UsageEvents({ accountId, onError }: UsageEventsProps) {
         )}
       </div>
       {total > 0 && (
-        <div style={{ marginTop: '12px', fontSize: '14px', color: '#64748b', textAlign: 'right' }}>
+        <div style={{ marginTop: '12px', fontSize: '14px', color: 'var(--text-secondary)', textAlign: 'right' }}>
           共 {total} 条记录
         </div>
       )}

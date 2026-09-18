@@ -1,0 +1,367 @@
+/* ═══════════════════════════════════════════════════════════════
+   trae-overlays.css — 浮层重塑（弹窗 / Toast / 确认框 / 添加账号）
+   ------------------------------------------------------------------
+   从 trae-components.css 拆出以控制单文件规模。浮层是唯一保留
+   一层轻投影的层级（--shadow-lg），其余平面化。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 弹窗 ───────────────────────────────────────────────────── */
+.modal-overlay,
+.error-modal-overlay {
+  background: var(--scrim);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.modal-content,
+.update-modal {
+  padding: 20px;
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-content h2,
+.update-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.update-modal {
+  text-align: left;
+}
+
+.update-notes {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  font-size: 12px;
+}
+
+.modal-desc {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.modal-content textarea,
+.detail-edit input,
+.machine-id-value,
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="date"] {
+  background: var(--bg-input);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-4);
+  font-size: 12px;
+}
+
+.modal-content textarea {
+  padding: 8px 10px;
+}
+
+.modal-content textarea:focus,
+.detail-edit input:focus {
+  outline: none;
+  border-color: var(--bg-brand);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.error-message {
+  background: var(--status-error-surface-l1);
+  color: var(--status-error-default);
+  border-radius: var(--radius-4);
+  font-size: 12px;
+}
+
+/* 分段选项卡：选中态用高对比中性面，而非品牌色（品牌色留给主 CTA） */
+.tab-btn,
+.mode-tab {
+  border-radius: var(--radius-4);
+  border: 1px solid var(--border-neutral-l1);
+  background: var(--bg-overlay-l1);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tab-btn:hover,
+.mode-tab:hover:not(:disabled) {
+  background: var(--bg-overlay-l2);
+}
+
+.tab-btn.active,
+.mode-tab.active {
+  background: var(--bg-invert);
+  border-color: var(--bg-invert);
+  color: var(--text-oninvert);
+}
+
+.token-help details {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+}
+
+.token-help summary,
+.token-help a {
+  font-size: 12px;
+}
+
+.token-help kbd,
+.token-help code {
+  background: var(--bg-overlay-l3);
+  border-radius: var(--radius-2);
+  font-size: 11px;
+}
+
+.token-help code {
+  color: var(--status-error-default);
+}
+
+.detail-modal,
+.detail-section {
+  border-color: var(--border-neutral-l1);
+}
+
+.detail-section h3 {
+  font-size: 13px;
+}
+
+.detail-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.detail-value {
+  font-size: 12px;
+}
+
+.detail-value.success {
+  color: var(--status-success-default);
+}
+
+.detail-value.danger {
+  color: var(--status-error-default);
+}
+
+.detail-value.editable:hover {
+  background: var(--bg-overlay-l1);
+  border-radius: var(--radius-2);
+}
+
+.password-toggle:hover {
+  background: var(--bg-overlay-l2);
+}
+
+/* 登录弹窗：去掉紫渐变阴影 */
+.login-btn {
+  position: relative;
+}
+
+.login-btn:disabled {
+  opacity: 0.6;
+}
+
+.login-divider::before,
+.login-divider::after {
+  background: var(--border-neutral-l1);
+}
+
+.login-spinner .spinner,
+.spinner {
+  border-color: var(--bg-overlay-l4);
+  border-top-color: var(--bg-brand);
+}
+
+/* ── Toast ──────────────────────────────────────────────────── */
+.toast-container {
+  top: 12px;
+  right: 12px;
+  gap: 8px;
+}
+
+.toast-item {
+  padding: 10px 12px;
+  background: var(--bg-menu);
+  border: 1px solid var(--border-neutral-l2);
+  border-left-width: 3px;
+  border-radius: var(--radius-6);
+  box-shadow: var(--shadow-lg);
+}
+
+.toast-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-4);
+  font-size: 11px;
+}
+
+.toast-success .toast-icon {
+  background: var(--status-success-surface-l1);
+  color: var(--status-success-default);
+}
+
+.toast-error .toast-icon {
+  background: var(--status-error-surface-l1);
+  color: var(--status-error-default);
+}
+
+.toast-info .toast-icon {
+  background: var(--status-primary-surface-l1);
+  color: var(--status-primary-default);
+}
+
+.toast-warning .toast-icon {
+  background: var(--status-warning-surface-l1);
+  color: var(--status-warning-default);
+}
+
+.toast-message {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* ── 确认弹窗按钮：语义色实心 ───────────────────────────────── */
+.confirm-modal {
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  box-shadow: var(--shadow-lg);
+}
+
+.confirm-title {
+  font-size: 15px;
+}
+
+.confirm-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.confirm-btn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--radius-4);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.confirm-btn.cancel {
+  background: var(--bg-overlay-l1);
+  border: 1px solid var(--border-neutral-l1);
+  color: var(--text-default);
+}
+
+.confirm-btn.cancel:hover {
+  background: var(--bg-overlay-l2);
+}
+
+.confirm-btn.danger {
+  background: var(--status-error-default);
+  border-color: var(--status-error-default);
+  color: #ffffff;
+}
+
+.confirm-btn.danger:hover {
+  background: var(--status-error-hover);
+}
+
+.confirm-btn.warning {
+  background: var(--status-warning-default);
+  border-color: var(--status-warning-default);
+  color: #ffffff;
+}
+
+.confirm-btn.warning:hover {
+  background: var(--status-warning-hover);
+}
+
+.confirm-btn.info {
+  background: var(--status-primary-default);
+  border-color: var(--status-primary-default);
+  color: #ffffff;
+}
+
+.confirm-btn.info:hover {
+  background: var(--status-primary-hover);
+}
+
+/* ── 添加账号弹窗 ───────────────────────────────────────────── */
+.add-account-header h2 {
+  font-size: 15px;
+}
+
+/* 头部「更多」是辅助操作，不能与主 CTA 同用实心品牌色 */
+.more-dropdown-btn {
+  height: 30px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-4);
+  border: 1px solid var(--border-neutral-l1);
+  background: var(--bg-overlay-l1);
+  color: var(--text-default);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.more-dropdown-btn:hover:not(:disabled) {
+  background: var(--bg-overlay-l2);
+  border-color: var(--border-neutral-l2);
+}
+
+.more-dropdown-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.quick-register-btn {
+  width: 100%;
+  gap: 6px;
+}
+
+/* 模式说明区：内凹面、8px 圆角，去掉图标发光 */
+.mode-description {
+  padding: 32px 24px;
+  background: var(--bg-inset);
+  border-radius: var(--radius-8);
+  border: 1px solid var(--border-neutral-l1);
+  box-shadow: none;
+}
+
+.mode-description svg {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 16px;
+  filter: none;
+}
+
+.trae-ide-mode,
+.empty-state {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+}
+
+.form-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.form-desc,
+.mode-description p,
+.mode-description li {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+
+.feature-item {
+  font-size: 12px;
+}

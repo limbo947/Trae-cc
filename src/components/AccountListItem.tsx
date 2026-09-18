@@ -1,4 +1,5 @@
 import type { UsageSummary } from "../types";
+import "./AccountCheckinBadge.css";
 
 interface AccountListItemProps {
   account: {
@@ -11,26 +12,41 @@ interface AccountListItemProps {
   };
   usage: UsageSummary | null;
   selected: boolean;
+  /** 今日签到状态（后端按本地日期判定，前端只负责渲染） */
+  checkedInToday: boolean;
   onSelect: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, id: string) => void;
 }
 
-export function AccountListItem({ account, usage, selected, onSelect, onContextMenu }: AccountListItemProps) {
+export function AccountListItem({ account, usage, selected, checkedInToday, onSelect, onContextMenu }: AccountListItemProps) {
   const hasUsage = !!usage;
   
-  // 根据是否是美元计费模式显示不同的额度
+  // 根据计费模式显示不同的额度：CN 积分钟 > 美元计费 > 请求次数
+  const isCreditsBilling = usage?.is_credits_billing ?? false;
   const isDollarBilling = usage?.is_dollar_billing ?? false;
-  
-  const totalUsed = isDollarBilling
+
+  const totalUsed = isCreditsBilling
+    ? (usage?.credits_used ?? 0)
+    : isDollarBilling
     ? (usage?.fast_dollar_used ?? 0)
     : (usage ? usage.fast_request_used + usage.extra_fast_request_used : 0);
-  const totalLimit = isDollarBilling
+  const totalLimit = isCreditsBilling
+    ? (usage?.credits_total ?? 0)
+    : isDollarBilling
     ? (usage?.fast_dollar_limit ?? 0)
     : (usage ? usage.fast_request_limit + usage.extra_fast_request_limit : 0);
-  const totalLeft = isDollarBilling
+  const totalLeft = isCreditsBilling
+    ? (usage?.credits_left ?? 0)
+    : isDollarBilling
     ? (usage?.fast_dollar_left ?? 0)
     : (usage ? usage.fast_request_left + usage.extra_fast_request_left : 0);
   const usagePercent = totalLimit > 0 ? Math.round((totalUsed / totalLimit) * 100) : 0;
+
+  // CN 积分按适用产品拆分：通用积分与 Work 专属积分
+  const generalTotal = usage?.credits_general_total ?? 0;
+  const generalLeft = usage?.credits_general_left ?? 0;
+  const workTotal = usage?.credits_work_total ?? 0;
+  const workLeft = usage?.credits_work_left ?? 0;
 
   const getUsageColor = () => {
     if (usagePercent >= 80) return "var(--danger)";
@@ -87,7 +103,12 @@ export function AccountListItem({ account, usage, selected, onSelect, onContextM
       </div>
 
       <div className="list-item-info">
-        <span className="list-item-email">{account.name || account.email}</span>
+        <div className="list-item-name-row">
+          <span className="list-item-email">{account.name || account.email}</span>
+          <span className={`checkin-tag ${checkedInToday ? "done" : "pending"}`}>
+            {checkedInToday ? "已签到" : "未签到"}
+          </span>
+        </div>
         <span className="list-item-id">Trae 账号</span>
       </div>
 
@@ -140,6 +161,12 @@ export function AccountListItem({ account, usage, selected, onSelect, onContextM
                 style={{ width: `${Math.min(usagePercent, 100)}%`, background: getUsageColor() }}
               />
             </div>
+            {isCreditsBilling && (generalTotal > 0 || workTotal > 0) && (
+              <div className="usage-split">
+                {generalTotal > 0 && <span>通用 剩 {Math.round(generalLeft)}</span>}
+                {workTotal > 0 && <span>Work 剩 {Math.round(workLeft)}</span>}
+              </div>
+            )}
           </>
         )}
       </div>

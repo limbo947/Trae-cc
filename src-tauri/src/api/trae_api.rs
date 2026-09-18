@@ -8,9 +8,11 @@ use chrono::{Local, SecondsFormat, Utc};
 
 use super::types::*;
 
-const API_BASE_US: &str = "https://api-us-east.trae.ai";
-const API_BASE_SG: &str = "https://api-sg-central.trae.ai";
-const API_BASE_UG: &str = "https://ug-normal.trae.ai";
+// 仅适配国内版 Trae CN：国际版分区域域名（us-east/sg-central/ug-normal）
+// 在 CN 版统一为 api.trae.com.cn，三个常量保留原名以避免改动调用处
+const API_BASE_US: &str = "https://api.trae.com.cn";
+const API_BASE_SG: &str = "https://api.trae.com.cn";
+const API_BASE_UG: &str = "https://api.trae.com.cn";
 
 pub struct EmailLoginResult {
     pub token: String,
@@ -81,8 +83,8 @@ impl TraeApiClient {
         let mut headers = header::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "application/json".parse()?);
         headers.insert(header::ACCEPT, "application/json, text/plain, */*".parse()?);
-        headers.insert(header::ORIGIN, "https://www.trae.ai".parse()?);
-        headers.insert(header::REFERER, "https://www.trae.ai/".parse()?);
+        headers.insert(header::ORIGIN, "https://www.trae.com.cn".parse()?);
+        headers.insert(header::REFERER, "https://www.trae.com.cn/".parse()?);
         headers.insert(
             header::USER_AGENT,
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".parse()?,
@@ -262,8 +264,8 @@ impl TraeApiClient {
             headers.insert(header::COOKIE, cookie_value);
         }
 
-        headers.insert(header::ORIGIN, "https://www.trae.ai".parse()?);
-        headers.insert(header::REFERER, "https://www.trae.ai/".parse()?);
+        headers.insert(header::ORIGIN, "https://www.trae.com.cn".parse()?);
+        headers.insert(header::REFERER, "https://www.trae.com.cn/".parse()?);
         headers.insert(
             header::USER_AGENT,
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".parse()?,
@@ -286,8 +288,8 @@ impl TraeApiClient {
         headers.insert(header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".parse()?);
         headers.insert(header::CONTENT_TYPE, "application/json".parse()?);
         headers.insert(header::ACCEPT, "application/json, text/plain, */*".parse()?);
-        headers.insert(header::ORIGIN, "https://www.trae.ai".parse()?);
-        headers.insert(header::REFERER, "https://www.trae.ai/".parse()?);
+        headers.insert(header::ORIGIN, "https://www.trae.com.cn".parse()?);
+        headers.insert(header::REFERER, "https://www.trae.com.cn/".parse()?);
         
         if !self.cookies.trim().is_empty() {
             let cookie_value = header::HeaderValue::from_bytes(self.cookies.as_bytes())
@@ -500,11 +502,47 @@ impl TraeApiClient {
             self.get_user_token().await?;
         }
 
+        // CN 版走积分钟模型：优先查 v2 端点，非积分钟再回退旧端点
+        if let Some(summary) = self.try_credits_usage().await {
+            return Ok(summary);
+        }
+
         let entitlements = self.get_entitlement_list().await?;
         Self::parse_entitlements_to_summary(entitlements)
     }
 
+    /// 尝试查询 CN 版积分额度
+    ///
+    /// 为什么要这个包装：两个用量入口（Token / Cookies）都需要"先试积分、
+    /// 失败或非积分钟则回退旧逻辑"的行为，且查询失败不应中断整体流程。
+    async fn try_credits_usage(&self) -> Option<UsageSummary> {
+        let headers = match self.build_headers_token_only() {
+            Ok(h) => h,
+            Err(_) => return None,
+        };
+
+        match crate::api::cn_credits::fetch_credits_usage(&self.client, headers, &self.api_base).await {
+            Ok(summary) if summary.is_credits_billing => {
+                println!("[TraeApiClient] ✅ CN 积分额度查询成功");
+                Some(summary)
+            }
+            Ok(_) => {
+                println!("[TraeApiClient] 非积分钟模式，回退旧额度接口");
+                None
+            }
+            Err(e) => {
+                println!("[TraeApiClient] 积分额度查询失败，回退旧额度接口: {}", e);
+                None
+            }
+        }
+    }
+
     pub async fn get_usage_summary_by_token(&self) -> Result<UsageSummary> {
+        // CN 版走积分钟模型：优先查 v2 端点，非积分钟再回退旧端点
+        if let Some(summary) = self.try_credits_usage().await {
+            return Ok(summary);
+        }
+
         let headers = self.build_headers_token_only()?;
         let endpoints = [&self.api_base, API_BASE_SG, API_BASE_US];
 
@@ -780,14 +818,14 @@ pub async fn login_with_email(email: &str, password: &str) -> Result<EmailLoginR
         .cookie_provider(cookie_jar.clone())
         .build()?;
 
-    let init_url = "https://www.trae.ai/login";
+    let init_url = "https://www.trae.com.cn/login";
     let _ = client
         .get(init_url)
         .header(header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .send()
         .await?;
 
-    let login_url = "https://ug-normal.trae.ai/passport/web/email/login/";
+    let login_url = "https://api.trae.com.cn/passport/web/email/login/";
     let login_params = [
         ("aid", "677332"),
         ("account_sdk_source", "web"),
@@ -807,8 +845,8 @@ pub async fn login_with_email(email: &str, password: &str) -> Result<EmailLoginR
     let login_response = client
         .post(login_url)
         .header(header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .header(header::ORIGIN, "https://www.trae.ai")
-        .header(header::REFERER, "https://www.trae.ai/")
+        .header(header::ORIGIN, "https://www.trae.com.cn")
+        .header(header::REFERER, "https://www.trae.com.cn/")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .query(&login_params)
         .form(&login_body)
@@ -840,14 +878,14 @@ pub async fn login_with_email(email: &str, password: &str) -> Result<EmailLoginR
         return Err(anyhow!("登录失败: {}", description));
     }
 
-    let trae_login_url = "https://ug-normal.trae.ai/cloudide/api/v3/trae/Login?type=email";
+    let trae_login_url = "https://api.trae.com.cn/cloudide/api/v3/trae/Login?type=email";
     println!("[login_with_email] 调用 Trae Login API: {}", trae_login_url);
 
     let trae_login_response = client
         .post(trae_login_url)
         .header(header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .header(header::ORIGIN, "https://www.trae.ai")
-        .header(header::REFERER, "https://www.trae.ai/")
+        .header(header::ORIGIN, "https://www.trae.com.cn")
+        .header(header::REFERER, "https://www.trae.com.cn/")
         .header(header::CONTENT_TYPE, "application/json")
         .send()
         .await?;
@@ -861,7 +899,7 @@ pub async fn login_with_email(email: &str, password: &str) -> Result<EmailLoginR
         return Err(anyhow!("Trae 登录失败: {} - {}", trae_status, &trae_body[..trae_body.len().min(200)]));
     }
 
-    let check_url = Url::parse("https://www.trae.ai")?;
+    let check_url = Url::parse("https://www.trae.com.cn")?;
     let cookies_str = cookie_jar.cookies(&check_url)
         .map(|v| v.to_str().unwrap_or_default().to_string())
         .unwrap_or_default();
@@ -872,8 +910,8 @@ pub async fn login_with_email(email: &str, password: &str) -> Result<EmailLoginR
     let token_response = client
         .post(&token_url)
         .header(header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .header(header::ORIGIN, "https://www.trae.ai")
-        .header(header::REFERER, "https://www.trae.ai/")
+        .header(header::ORIGIN, "https://www.trae.com.cn")
+        .header(header::REFERER, "https://www.trae.com.cn/")
         .header(header::CONTENT_TYPE, "application/json")
         .send()
         .await?;
@@ -890,7 +928,8 @@ pub async fn login_with_email(email: &str, password: &str) -> Result<EmailLoginR
         .map(|v| v.to_str().unwrap_or_default().to_string())
         .unwrap_or_default();
     if !cookies.is_empty() && !cookies.contains("store-idc=") && !cookies.contains("trae-target-idc=") {
-        cookies = format!("{cookies}; store-idc=alisg");
+        // 国内版 IDC 标识（推断值，仅在 cookie 缺失时补全）
+        cookies = format!("{cookies}; store-idc=alicn");
     }
 
     println!("[login_with_email] ✅ 登录成功，获取到 cookies (长度: {})", cookies.len());

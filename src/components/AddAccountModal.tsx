@@ -239,7 +239,7 @@ export function AddAccountModal({
           {/* 更多下拉菜单 */}
           <div className="more-dropdown-container header-dropdown" ref={dropdownRef}>
             <button
-              className="quick-register-btn"
+              className="more-dropdown-btn"
               onClick={() => setShowMoreDropdown(!showMoreDropdown)}
               disabled={loading}
             >

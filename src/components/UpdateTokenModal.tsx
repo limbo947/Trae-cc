@@ -115,7 +115,7 @@ export function UpdateTokenModal({
           <details>
             <summary>如何获取新 Token？</summary>
             <ol>
-              <li>打开 <a href="https://www.trae.ai/account-setting#usage" target="_blank" rel="noopener noreferrer">trae.ai 账号设置页面</a> 并登录对应账号</li>
+              <li>打开 <a href="https://www.trae.com.cn/account-setting#usage" target="_blank" rel="noopener noreferrer">trae.com.cn 账号设置页面</a> 并登录对应账号</li>
               <li>按 <kbd>F12</kbd> 打开开发者工具</li>
               <li>切换到 <strong>Network</strong> 标签</li>
               <li>刷新页面</li>

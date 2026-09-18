@@ -490,7 +490,62 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
 
         {usage && (
           <>
-            {usage.is_dollar_billing ? (
+            {usage.is_credits_billing ? (
+              // CN 积分钟模型 - 按适用产品分开显示：通用积分与 Work 专属积分
+              <>
+                <div className="detail-section">
+                  <h3>💰 额度（积分合计）</h3>
+                  <div className="detail-row">
+                    <span className="detail-label">已使用</span>
+                    <span className="detail-value">{formatNumber(usage.credits_used)}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-label">总配额</span>
+                    <span className="detail-value">{formatNumber(usage.credits_total)}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-label">剩余</span>
+                    <span className="detail-value success">{formatNumber(usage.credits_left)}</span>
+                  </div>
+                </div>
+
+                {(usage.credits_general_total ?? 0) > 0 && (
+                  <div className="detail-section">
+                    <h3>🌐 通用积分（TraeCode / TraeWork 通用）</h3>
+                    <div className="detail-row">
+                      <span className="detail-label">已使用</span>
+                      <span className="detail-value">{formatNumber(usage.credits_general_used ?? 0)}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">总配额</span>
+                      <span className="detail-value">{formatNumber(usage.credits_general_total ?? 0)}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">剩余</span>
+                      <span className="detail-value success">{formatNumber(usage.credits_general_left ?? 0)}</span>
+                    </div>
+                  </div>
+                )}
+
+                {(usage.credits_work_total ?? 0) > 0 && (
+                  <div className="detail-section">
+                    <h3>💼 Work 专属积分（仅 TraeWork）</h3>
+                    <div className="detail-row">
+                      <span className="detail-label">已使用</span>
+                      <span className="detail-value">{formatNumber(usage.credits_work_used ?? 0)}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">总配额</span>
+                      <span className="detail-value">{formatNumber(usage.credits_work_total ?? 0)}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">剩余</span>
+                      <span className="detail-value success">{formatNumber(usage.credits_work_left ?? 0)}</span>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : usage.is_dollar_billing ? (
               // 美元计费模式 - 显示 Basic 和 Bonus 额度详情
               <>
                 <div className="detail-section">

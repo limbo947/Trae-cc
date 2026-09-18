@@ -309,6 +309,20 @@ pub struct UsageSummary {
 
     // 是否是美元计费模式 (新账号)
     pub is_dollar_billing: bool,
+
+    // CN 版积分钟模型（v2 端点返回，国际版无此模式）
+    pub is_credits_billing: bool,
+    pub credits_total: f64,
+    pub credits_used: f64,
+    pub credits_left: f64,
+
+    // CN 积分按适用产品拆分（官方规则）：通用积分（TraeCode/TraeWork 均可用）与 Work 专属积分（仅 TraeWork）
+    pub credits_general_total: f64,
+    pub credits_general_used: f64,
+    pub credits_general_left: f64,
+    pub credits_work_total: f64,
+    pub credits_work_used: f64,
+    pub credits_work_left: f64,
 }
 
 impl Default for UsageSummary {
@@ -343,6 +357,77 @@ impl Default for UsageSummary {
             autocomplete_limit: 5000,
             autocomplete_left: 5000.0,
             is_dollar_billing: false,
+            is_credits_billing: false,
+            credits_total: 0.0,
+            credits_used: 0.0,
+            credits_left: 0.0,
+            credits_general_total: 0.0,
+            credits_general_used: 0.0,
+            credits_general_left: 0.0,
+            credits_work_total: 0.0,
+            credits_work_used: 0.0,
+            credits_work_left: 0.0,
         }
     }
+}
+
+/// CN 版积分额度：v2 端点 `/trae/api/v2/pay/ide_user_ent_usage` 响应
+/// 为什么单列一套类型：CN 版用积分（credits）替代国际版的美元/请求次数模型，
+/// quota 与 usage 的字段名完全不同，无法复用 EntitlementListResponse
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditsEntitlementResponse {
+    #[serde(default)]
+    pub is_credits_billing: bool,
+    #[serde(default)]
+    pub usage_summary: Option<CreditsUsageSummary>,
+    #[serde(default)]
+    pub user_entitlement_pack_list: Vec<CreditsPack>,
+}
+
+/// 积分总额汇总（服务端已聚合，无需自行累加各礼包）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditsUsageSummary {
+    #[serde(default)]
+    pub total_amount: f64,
+    #[serde(default)]
+    pub consumed_amount: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditsPack {
+    #[serde(default)]
+    pub display_desc: String,
+    pub entitlement_base_info: CreditsBaseInfo,
+    #[serde(default)]
+    pub usage: Option<CreditsUsageAmount>,
+}
+
+/// 单个礼包已用积分（v2 响应里 usage 可能是空对象）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditsUsageAmount {
+    #[serde(default)]
+    pub credits_amount: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditsBaseInfo {
+    #[serde(default)]
+    pub product_type: i32,
+    #[serde(default)]
+    pub product_id: i32,
+    #[serde(default)]
+    pub end_time: i64,
+    #[serde(default)]
+    pub quota: Option<CreditsQuota>,
+    /// 积分适用端点（后端字段，实测：0 = 通用积分，1 = Work 专属积分）
+    /// 判据：官方规则「老用户升级福利 = 2000 通用 + 2000 Work 专属」「每月登录/每日签到 = 通用」，
+    /// 与实测礼包 pid 208/221(ep=0) 与 pid 209(ep=1) 的对应关系一致
+    #[serde(default)]
+    pub available_endpoint: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditsQuota {
+    #[serde(default)]
+    pub credits_limit: i64,
 }

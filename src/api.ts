@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, AccountBrief, AppSettings, UsageSummary, UsageEventsResponse, UserStatisticData } from "./types";
+import type { Account, AccountBrief, AppSettings, CheckinResult, UsageSummary, UsageEventsResponse, UserStatisticData } from "./types";
 
 // ============ 快速注册后端 API 配置 ============
 // 从环境变量读取配置，如果没有则使用空字符串（功能将不可用）
@@ -297,6 +297,28 @@ export async function scanTraePath(): Promise<string> {
 // 获取用户统计数据
 export async function getUserStatistics(accountId: string): Promise<UserStatisticData> {
   return invokeNetwork("get_user_statistics", { accountId });
+}
+
+// ============ 每日签到 API ============
+
+// 单账号签到（手动）
+export async function checkinAccount(accountId: string): Promise<CheckinResult> {
+  return invokeNetwork("checkin_account", { accountId });
+}
+
+// 全部账号签到（手动）
+export async function checkinAllAccounts(): Promise<CheckinResult[]> {
+  return invokeNetwork("checkin_all_accounts");
+}
+
+// 自动签到（方案B：仅今日未签到的账号，启动时静默调用）
+export async function autoCheckin(): Promise<CheckinResult[]> {
+  return invokeNetwork("auto_checkin");
+}
+
+// 重置单账号签到设备号（9095 自救：本地命令，不走联网检查）
+export async function resetAccountDeviceId(accountId: string): Promise<void> {
+  return invoke("reset_account_device_id", { accountId });
 }
 
 // 打开购买页面（内置浏览器，携带账号 Cookies）

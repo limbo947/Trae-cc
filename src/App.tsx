@@ -15,7 +15,7 @@ import { Settings } from "./pages/Settings";
 import { About } from "./pages/About";
 
 import * as api from "./api";
-import type { Account, AccountBrief, AppSettings, UsageSummary } from "./types";
+import type { Account, AccountBrief, AppSettings, CheckinResult, UsageSummary } from "./types";
 import "./App.css";
 
 interface AccountWithUsage extends AccountBrief {
@@ -25,6 +25,38 @@ interface AccountWithUsage extends AccountBrief {
 
 type ViewMode = "grid" | "list";
 const USAGE_CACHE_KEY = "trae_usage_cache_v1";
+
+/**
+ * 把冷却状态渲染成用户可读文案。
+ *
+ * 为什么按 reason 而不是按 cooldown_until 数值判定：auth_expired 的 until 是 i64::MAX，
+ * 超出 JS 安全整数范围、JSON 反序列化后等值判断不可靠，因此后端契约规定前端只读字符串。
+ */
+function describeCooldown(result: CheckinResult): string {
+  const base = (() => {
+    switch (result.cooldown_reason) {
+      case "auth_expired":
+        return "登录状态已失效，需重新登录";
+      case "rate_limited":
+        return "签到人数过多，稍后再试";
+      case "risk_control":
+        return "账号权益不足，暂不可签到";
+      case "server_error":
+        return "服务端暂时不可用，稍后再试";
+      default:
+        return result.detail;
+    }
+  })();
+
+  // 剩余时间只对「有时限」的冷却展示；auth_expired 的 until 是 i64::MAX 哨兵，不参与数值运算
+  if (result.cooldown_reason && result.cooldown_reason !== "auth_expired") {
+    const remainMs = (result.cooldown_until ?? 0) * 1000 - Date.now();
+    if (remainMs > 0) {
+      return `${base}（剩余约 ${Math.max(1, Math.ceil(remainMs / 60000))} 分钟）`;
+    }
+  }
+  return base;
+}
 
 function App() {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
@@ -75,6 +107,7 @@ function App() {
 
   const quickRegisterNoticeRef = useRef<Map<string, number>>(new Map());
   const toastDedupRef = useRef<Map<string, number>>(new Map());
+  const autoCheckinRanRef = useRef(false);
   const quickRegisterShowWindow = appSettings?.quick_register_show_window ?? false;
 
   // 网络状态监听
@@ -282,6 +315,33 @@ function App() {
     loadAccounts();
   }, [loadAccounts]);
 
+  // 自动签到（方案B）：启动时检查「今日是否已签」，未签的账号后台静默执行（不弹提示）
+  useEffect(() => {
+    if (!hasLoaded || autoCheckinRanRef.current || accounts.length === 0) return;
+    autoCheckinRanRef.current = true;
+    void (async () => {
+      try {
+        const results = await api.autoCheckin();
+        const handledIds = results
+          .filter((r) => r.state === "ok" || r.state === "already")
+          .map((r) => r.account_id);
+        if (handledIds.length > 0) {
+          // 自动签到同样要把徽标改成「已签到」，否则启动后仍显示未签到（与实际不符）
+          setAccounts((prev) =>
+            prev.map((a) => (handledIds.includes(a.id) ? { ...a, checked_in_today: true } : a))
+          );
+          const targets = accounts.filter((a) => handledIds.includes(a.id));
+          if (targets.length > 0) {
+            await refreshUsageForAccounts(targets);
+          }
+        }
+      } catch (err) {
+        // 静默执行：失败只记录日志，不打扰用户
+        console.warn("[auto-checkin] 自动签到失败:", err);
+      }
+    })();
+  }, [hasLoaded, accounts, refreshUsageForAccounts]);
+
   // 删除账号
   const handleDeleteAccount = async (accountId: string) => {
     setConfirmModal({
@@ -339,6 +399,106 @@ function App() {
     }
   };
 
+  // 单账号签到（右键菜单手动触发）
+  const handleCheckinAccount = async (accountId: string) => {
+    try {
+      const result = await api.checkinAccount(accountId);
+      if (result.state === "ok" || result.state === "already") {
+        // 签到成功/已签到：本地把该账号标为「今日已签到」，
+        // 避免等整批 loadAccounts 才刷新（网格/列表的徽标能即时变绿）
+        setAccounts((prev) =>
+          prev.map((a) => (a.id === accountId ? { ...a, checked_in_today: true } : a))
+        );
+      }
+      if (result.state === "ok") {
+        addToast("success", result.detail);
+      } else if (result.state === "already") {
+        addToast("info", `${result.account_name} 今日已签到`);
+      } else if (result.state === "cooldown") {
+        // 冷却不是错误：本次未尝试，按 info 展示
+        addToast("info", `${result.account_name}：${describeCooldown(result)}`, 4000);
+      } else if (result.state === "rate_limited") {
+        addToast("warning", `${result.account_name}：${result.detail}`);
+      } else {
+        addToast("warning", result.detail);
+      }
+      // 冷却中未发请求，刷新用量没有意义
+      if (result.state !== "failed" && result.state !== "cooldown") {
+        await handleRefreshAccount(accountId, { silent: true });
+      }
+    } catch (err: any) {
+      // 防重入被拒（「签到进行中」）属于状态提示而非错误
+      const message: string = err?.message || "签到失败";
+      addToast(message.includes("签到进行中") ? "info" : "error", message);
+    }
+  };
+
+  // 重置签到设备号（9095「本设备今日已签到」的自救手段）
+  //
+  // 为什么要确认对话框：重置会清掉已签到日期，存在「同日二次领取」的理论通路，
+  // 唯一防线是后端 claim 前必先查 status（今日已真签到成功的会被短路为 Already）。
+  // 文案必须把这一点如实告知，避免用户误以为重置能重复拿积分。
+  const handleResetDeviceId = async (accountId: string) => {
+    const target = accounts.find((a) => a.id === accountId);
+    setConfirmModal({
+      isOpen: true,
+      title: "重置设备标识",
+      message:
+        "将为此账号生成新的签到设备号，并清除签到冷却与今日签到记录，用于「本设备今日已签到」的自救。\n\n" +
+        "今日已签到成功的账号重置后不会重复获得积分；限流（签到人数过多）是账号级限制，重置不会解除。\n\n" +
+        "账号的 IDE 机器码不受影响。确定继续吗？",
+      type: "warning",
+      onConfirm: async () => {
+        setConfirmModal(null);
+        try {
+          await api.resetAccountDeviceId(accountId);
+          addToast("success", `${target?.name ?? "账号"} 设备标识已重置，下次自动签到将重试该账号`, 4000);
+          await loadAccounts();
+        } catch (err: any) {
+          const message: string = err?.message || "重置设备标识失败";
+          addToast(message.includes("签到进行中") ? "info" : "error", message);
+        }
+      },
+    });
+  };
+
+  // 全部账号签到（工具栏手动触发）
+  const handleCheckinAll = async () => {
+    if (accounts.length === 0) return;
+    addToast("info", "正在签到，请稍候...", 2000, "checkin-all-progress");
+    try {
+      const results = await api.checkinAllAccounts();
+      // 成功的账号即时把徽标改为「已签到」（与后端写入 last_checkin_date 的口径一致）
+      const checkedInIds = new Set(
+        results.filter((r) => r.state === "ok" || r.state === "already").map((r) => r.account_id)
+      );
+      if (checkedInIds.size > 0) {
+        setAccounts((prev) =>
+          prev.map((a) => (checkedInIds.has(a.id) ? { ...a, checked_in_today: true } : a))
+        );
+      }
+      const ok = results.filter((r) => r.state === "ok").length;
+      const already = results.filter((r) => r.state === "already").length;
+      const cooldown = results.filter((r) => r.state === "cooldown");
+      const rateLimited = results.filter((r) => r.state === "rate_limited");
+      const failed = results.filter((r) => r.state === "failed");
+      const cooldownNote = cooldown.length > 0 ? `，冷却 ${cooldown.length}` : "";
+      if (failed.length > 0) {
+        const rateNote = rateLimited.length > 0 ? `，限流 ${rateLimited.length}` : "";
+        addToast("warning", `签到完成：成功 ${ok}，已签到 ${already}${cooldownNote}，失败 ${failed.length}${rateNote}（${failed[0].detail}）`, 5000);
+      } else if (rateLimited.length > 0 || cooldown.length > 0) {
+        const first = rateLimited[0] ?? cooldown[0];
+        addToast("warning", `签到完成：成功 ${ok}，已签到 ${already}${cooldownNote}，限流 ${rateLimited.length}（${first.detail}）`, 5000);
+      } else {
+        addToast("success", `签到完成：成功 ${ok}，已签到 ${already}`, 3000);
+      }
+      await refreshUsageForAccounts(accounts);
+    } catch (err: any) {
+      const message: string = err?.message || "批量签到失败";
+      addToast(message.includes("签到进行中") ? "info" : "error", message);
+    }
+  };
+
   const handleAccountAdded = useCallback(
     (account: Account) => {
       console.log("[handleAccountAdded] 添加账号:", account.id, account.email);
@@ -354,6 +514,8 @@ function App() {
         created_at: account.created_at,
         machine_id: account.machine_id,
         is_current: false,
+        // 新添加的账号今日必然未签到（AccountBrief 的派生字段，Account 上没有）
+        checked_in_today: false,
         usage: null,
         password: account.password ?? null,
       };
@@ -443,7 +605,7 @@ function App() {
             name: "Trae IDE",
             extensions: ["exe"]
           }],
-          title: "请选择 Trae.exe 文件"
+          title: "请选择 Trae CN.exe 文件"
         });
 
         if (selected) {
@@ -898,6 +1060,9 @@ function App() {
                     )}
                   </div>
                   <div className="toolbar-right">
+                    <button className="header-btn" onClick={handleCheckinAll} style={{ padding: "8px 14px", fontSize: "13px" }}>
+                      ✅ 全部签到
+                    </button>
                     <button className="add-btn" onClick={() => setShowAddModal(true)} style={{padding: '8px 16px', fontSize: '13px'}}>
                       <span>+</span> 添加账号
                     </button>
@@ -932,6 +1097,7 @@ function App() {
                       account={account}
                       usage={account.usage || null}
                       selected={selectedIds.has(account.id)}
+                      checkedInToday={account.checked_in_today}
                       onSelect={handleSelectAccount}
                       onContextMenu={handleContextMenu}
                       onToast={addToast}
@@ -956,6 +1122,7 @@ function App() {
                       account={account}
                       usage={account.usage || null}
                       selected={selectedIds.has(account.id)}
+                      checkedInToday={account.checked_in_today}
                       onSelect={handleSelectAccount}
                       onContextMenu={handleContextMenu}
                     />
@@ -974,7 +1141,7 @@ function App() {
           />
         )}
 
-        {currentPage === "about" && <About onToast={addToast} />}
+        {currentPage === "about" && <About />}
       </div>
 
       {/* Toast 通知 */}
@@ -1011,6 +1178,14 @@ function App() {
           }}
           onRefresh={() => {
             handleRefreshAccount(contextMenu.accountId);
+            setContextMenu(null);
+          }}
+          onCheckin={() => {
+            void handleCheckinAccount(contextMenu.accountId);
+            setContextMenu(null);
+          }}
+          onResetDeviceId={() => {
+            void handleResetDeviceId(contextMenu.accountId);
             setContextMenu(null);
           }}
           onUpdateToken={() => {

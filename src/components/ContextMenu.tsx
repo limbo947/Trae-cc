@@ -7,6 +7,8 @@ interface ContextMenuProps {
   onRelogin: () => void;
   onViewDetail: () => void;
   onRefresh: () => void;
+  onCheckin: () => void;
+  onResetDeviceId: () => void;
   onUpdateToken: () => void;
   onCopyToken: () => void;
   onSwitchAccount: () => void;
@@ -22,6 +24,8 @@ export function ContextMenu({
   onRelogin,
   onViewDetail,
   onRefresh,
+  onCheckin,
+  onResetDeviceId,
   onUpdateToken,
   onCopyToken,
   onSwitchAccount,
@@ -68,6 +72,14 @@ export function ContextMenu({
         <div className="context-menu-item" onClick={onRefresh}>
           <span className="icon">🔄</span>
           刷新数据
+        </div>
+        <div className="context-menu-item" onClick={onCheckin}>
+          <span className="icon">✅</span>
+          签到
+        </div>
+        <div className="context-menu-item" onClick={onResetDeviceId}>
+          <span className="icon">🔧</span>
+          重置设备标识
         </div>
         <div className="context-menu-item" onClick={onViewDetail}>
           <span className="icon">👁</span>

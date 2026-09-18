@@ -1,0 +1,369 @@
+/* ═══════════════════════════════════════════════════════════════
+   trae-tokens.css — Trae 设计语言 Token 层
+   ------------------------------------------------------------------
+   为什么单独成层：App.css 已有 5000+ 行历史样式，全部走 CSS 变量，
+   但变量值是旧的玻璃拟态/紫色渐变体系。这里只重定义变量与基础排印，
+   不改历史规则即可让整站换肤；组件级结构差异放在 trae-components.css。
+   - 暗色（默认）：TraeCode 设计系统（#1A1B1D 底 + 品牌绿 #32F08C）
+   - 亮色：TraeWork 设计系统（#FFFFFF 底 + 品牌靛蓝 #4B3FE3）
+   两套系统的字号/圆角/间距尺度一致，组件层无需分叉。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 亮色：TraeWork ──────────────────────────────────────────── */
+:root {
+  /* 表面 */
+  --bg-base-default: #ffffff;
+  --bg-base-secondary: #f5f5f5;
+  --bg-base-tertiary: #e5e5e5;
+  --bg-menu: #ffffff;
+  --bg-tooltip: #ffffff;
+  --bg-overlay-l1: rgba(115, 115, 115, 0.08);
+  --bg-overlay-l2: rgba(115, 115, 115, 0.12);
+  --bg-overlay-l3: rgba(115, 115, 115, 0.16);
+  --bg-overlay-l4: rgba(115, 115, 115, 0.20);
+  --bg-invert: #262626;
+  --bg-invert-hover: #404040;
+  --text-oninvert: #ffffff;
+
+  /* 文字 / 图标 */
+  --text-default: #171717;
+  --text-default-hover: #262626;
+  --text-secondary: #404040;
+  --text-tertiary: #737373;
+  --text-disabled: #a1a1a1;
+  --icon-default: #262626;
+  --icon-secondary: #404040;
+  --icon-tertiary: #737373;
+
+  /* 品牌 */
+  --bg-brand: #4b3fe3;
+  --bg-brand-hover: #6a6fff;
+  --bg-brand-active: #3f31c6;
+  --bg-brand-disabled: rgba(75, 63, 227, 0.22);
+  --bg-brand-popup: rgba(75, 63, 227, 0.10);
+  --text-onbrand: #ffffff;
+
+  /* 边框 */
+  --border-neutral-l1: rgba(115, 115, 115, 0.12);
+  --border-neutral-l2: rgba(115, 115, 115, 0.18);
+  --border-neutral-l3: rgba(115, 115, 115, 0.36);
+
+  /* 状态 */
+  --status-primary-default: #2f74ff;
+  --status-primary-hover: #4c88ff;
+  --status-primary-surface-l1: rgba(47, 116, 255, 0.12);
+  --status-success-default: #15a877;
+  --status-success-hover: #2fb287;
+  --status-success-surface-l1: rgba(64, 176, 139, 0.12);
+  --status-alert-default: #fea900;
+  --status-alert-surface-l1: rgba(254, 169, 0, 0.14);
+  --status-warning-default: #e27900;
+  --status-warning-hover: #f39a35;
+  --status-warning-surface-l1: rgba(226, 121, 0, 0.12);
+  --status-error-default: #e8463a;
+  --status-error-hover: #ea574c;
+  --status-error-surface-l1: rgba(232, 70, 58, 0.12);
+
+  /* ── 旧版变量别名（App.css 历史规则消费，名字保持不变） ── */
+  --bg-primary: #ffffff;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-inset: #f5f5f5; /* 卡片内凹面：搜索框/用量面板/进度轨 */
+  --bg-hover: var(--bg-overlay-l1);
+  --bg-active: var(--bg-overlay-l2);
+  --bg-input: #ffffff;
+
+  --text-primary: #171717;
+  --text-secondary: #404040;
+  --text-muted: #737373;
+  --text-inverse: #ffffff;
+
+  --accent: #4b3fe3;
+  --accent-hover: #6a6fff;
+  --accent-light: #8894ff;
+  --accent-bg: rgba(75, 63, 227, 0.10);
+  --accent-glow: rgba(75, 63, 227, 0.18);
+
+  --success: #15a877;
+  --success-light: rgba(21, 168, 119, 0.35);
+  --success-bg: rgba(21, 168, 119, 0.12);
+  --warning: #e27900;
+  --warning-light: rgba(226, 121, 0, 0.30);
+  --warning-bg: rgba(226, 121, 0, 0.12);
+  --danger: #e8463a;
+  --danger-light: rgba(232, 70, 58, 0.30);
+  --danger-bg: rgba(232, 70, 58, 0.12);
+  --info: #2f74ff;
+  --info-bg: rgba(47, 116, 255, 0.12);
+
+  --border: var(--border-neutral-l2);
+  --border-light: var(--border-neutral-l1);
+  --border-focus: #4b3fe3;
+
+  /* Trae 语言：平面无阴影，仅浮层（菜单/弹窗/Toast）保留一层轻阴影 */
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow: none;
+  --shadow-md: none;
+  --shadow-lg: 0 8px 24px rgba(23, 23, 23, 0.10), 0 1px 2px rgba(23, 23, 23, 0.06);
+  --shadow-hover: none;
+  --shadow-glass: none;
+
+  /* 旧渐变变量统一降级为纯色，历史 gradient 规则自动变实心 */
+  --gradient-accent: #4b3fe3;
+  --gradient-card: #ffffff;
+  --gradient-glass: #ffffff;
+  --glass-bg: #ffffff;
+  --glass-border: var(--border-neutral-l1);
+
+  /* 浮层遮罩 / 开关旋钮 */
+  --scrim: rgba(23, 23, 23, 0.32);
+  --thumb-off: #ffffff;
+
+  /* 热力图（亮色绿色阶） */
+  --heatmap-empty: #e5e5e5;
+  --heatmap-low: #c6e9d9;
+  --heatmap-mid: #7cd0aa;
+  --heatmap-high: #2fb287;
+  --heatmap-max: #15a877;
+  --heatmap-cell-border: rgba(115, 115, 115, 0.12);
+
+  /* 圆角：硬边尺度 2/4/6/8/10 */
+  --radius-2: 2px;
+  --radius-4: 4px;
+  --radius-6: 6px;
+  --radius-8: 8px;
+  --radius-10: 10px;
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+
+  /* 间距 */
+  --spacer-4: 4px;
+  --spacer-8: 8px;
+  --spacer-12: 12px;
+  --spacer-16: 16px;
+  --spacer-24: 24px;
+  --spacer-32: 32px;
+
+  /* 动效：快速、克制，无弹性 */
+  --transition-fast: 0.12s ease;
+  --transition: 0.15s ease;
+  --transition-slow: 0.2s ease;
+}
+
+/* ── 暗色：TraeCode（默认主题；purple/green 为旧存储值的兼容别名） ── */
+[data-theme='dark'],
+[data-theme='purple'],
+[data-theme='green'] {
+  /* 表面 */
+  --bg-base-default: #1a1b1d;
+  --bg-base-secondary: #222427;
+  --bg-base-tertiary: #2a2d31;
+  --bg-menu: #202123;
+  --bg-tooltip: #1a1b1d;
+  --bg-overlay-l1: rgba(224, 226, 242, 0.04);
+  --bg-overlay-l2: rgba(224, 226, 242, 0.06);
+  --bg-overlay-l3: rgba(224, 226, 242, 0.08);
+  --bg-overlay-l4: rgba(224, 226, 242, 0.12);
+  --bg-invert: #dadde5;
+  --bg-invert-hover: #edeff2;
+  --text-oninvert: #0c0c0d;
+
+  /* 文字 / 图标 */
+  --text-default: #d1d3db;
+  --text-default-hover: #f5f9fe;
+  --text-secondary: #9599a6;
+  --text-tertiary: #666b75;
+  --text-disabled: #666b75;
+  --icon-default: #d1d3db;
+  --icon-secondary: #9599a6;
+  --icon-tertiary: #666b75;
+
+  /* 品牌：Trae 绿，配深色文字 */
+  --bg-brand: #32f08c;
+  --bg-brand-hover: #0fdc78;
+  --bg-brand-active: #0fdc78;
+  --bg-brand-disabled: rgba(50, 240, 140, 0.20);
+  --bg-brand-popup: rgba(50, 240, 140, 0.12);
+  --text-onbrand: #0c0c0d;
+
+  /* 边框 */
+  --border-neutral-l1: rgba(224, 226, 242, 0.10);
+  --border-neutral-l2: rgba(224, 226, 242, 0.16);
+  --border-neutral-l3: rgba(224, 226, 242, 0.20);
+
+  /* 状态 */
+  --status-primary-default: #387bff;
+  --status-primary-hover: #4c88ff;
+  --status-primary-surface-l1: rgba(53, 121, 255, 0.18);
+  --status-success-default: #33c192;
+  --status-success-hover: #5ed4ad;
+  --status-success-surface-l1: rgba(0, 165, 110, 0.18);
+  --status-alert-default: #d29d00;
+  --status-alert-surface-l1: rgba(210, 157, 0, 0.16);
+  --status-warning-default: #d27e24;
+  --status-warning-hover: #d78b28;
+  --status-warning-surface-l1: rgba(210, 126, 36, 0.16);
+  --status-error-default: #f65a5a;
+  --status-error-hover: #f86262;
+  --status-error-surface-l1: rgba(246, 70, 70, 0.18);
+
+  /* ── 旧版变量别名 ── */
+  --bg-primary: #1a1b1d;
+  --bg-secondary: #222427;
+  --bg-card: #222427;
+  --bg-inset: #1a1b1d;
+  --bg-hover: var(--bg-overlay-l2);
+  --bg-active: var(--bg-overlay-l3);
+  --bg-input: #1a1b1d;
+
+  --text-primary: #d1d3db;
+  --text-secondary: #9599a6;
+  --text-muted: #666b75;
+  /* 品牌按钮是绿底，旧规则里的 inverse 文字必须是深色 */
+  --text-inverse: #0c0c0d;
+
+  --accent: #32f08c;
+  --accent-hover: #0fdc78;
+  --accent-light: #5cf5a8;
+  --accent-bg: rgba(50, 240, 140, 0.12);
+  --accent-glow: rgba(50, 240, 140, 0.22);
+
+  --success: #33c192;
+  --success-light: rgba(51, 193, 146, 0.35);
+  --success-bg: rgba(0, 165, 110, 0.18);
+  --warning: #d27e24;
+  --warning-light: rgba(210, 126, 36, 0.30);
+  --warning-bg: rgba(210, 126, 36, 0.16);
+  --danger: #f65a5a;
+  --danger-light: rgba(246, 90, 90, 0.30);
+  --danger-bg: rgba(246, 70, 70, 0.18);
+  --info: #387bff;
+  --info-bg: rgba(53, 121, 255, 0.18);
+
+  --border: var(--border-neutral-l2);
+  --border-light: var(--border-neutral-l1);
+  --border-focus: #32f08c;
+
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow: none;
+  --shadow-md: none;
+  --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.50), 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-hover: none;
+  --shadow-glass: none;
+
+  --gradient-accent: #32f08c;
+  --gradient-card: #222427;
+  --gradient-glass: #222427;
+  --glass-bg: #222427;
+  --glass-border: var(--border-neutral-l1);
+
+  --scrim: rgba(0, 0, 0, 0.55);
+  --thumb-off: #dadde5;
+
+  /* 热力图（暗色保留 GitHub 深绿阶，最高档提为品牌绿） */
+  --heatmap-empty: rgba(224, 226, 242, 0.08);
+  --heatmap-low: #0e4429;
+  --heatmap-mid: #006d32;
+  --heatmap-high: #26a641;
+  --heatmap-max: #32f08c;
+  --heatmap-cell-border: rgba(224, 226, 242, 0.06);
+
+  --radius-2: 2px;
+  --radius-4: 4px;
+  --radius-6: 6px;
+  --radius-8: 8px;
+  --radius-10: 10px;
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+
+  --spacer-4: 4px;
+  --spacer-8: 8px;
+  --spacer-12: 12px;
+  --spacer-16: 16px;
+  --spacer-24: 24px;
+  --spacer-32: 32px;
+
+  --transition-fast: 0.12s ease;
+  --transition: 0.15s ease;
+  --transition-slow: 0.2s ease;
+}
+
+/* ── 基础排印与全局元素 ──────────────────────────────────────── */
+html,
+body,
+button,
+input,
+select,
+textarea {
+  font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui,
+    -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  font-size: 13px;
+  line-height: 20px;
+  background: var(--bg-base-default);
+  color: var(--text-default);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+code,
+kbd,
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace;
+}
+
+::selection {
+  background: var(--accent-bg);
+  color: var(--text-default);
+}
+
+/* 键盘可达性焦点环：品牌色 2px 描边 */
+:focus-visible {
+  outline: 2px solid var(--bg-brand);
+  outline-offset: 1px;
+}
+
+/* 原生下拉选项在暗色下跟随表面色，避免白底牌 */
+select option {
+  background: var(--bg-base-secondary);
+  color: var(--text-default);
+}
+
+/* 细滚动条：IDE 风格 */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--bg-overlay-l4);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-overlay-l4) transparent;
+}

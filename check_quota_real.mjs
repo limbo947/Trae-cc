@@ -19,8 +19,7 @@ console.log(`  Expire: ${new Date(payload.exp * 1000).toLocaleString()}`);
 console.log();
 
 const endpoints = [
-  'api-sg-central.trae.ai',
-  'api-us-east.trae.ai'
+  'api.trae.com.cn'
 ];
 
 async function checkQuota(host) {
@@ -34,8 +33,8 @@ async function checkQuota(host) {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/plain, */*',
-        'Origin': 'https://www.trae.ai',
-        'Referer': 'https://www.trae.ai/',
+        'Origin': 'https://www.trae.com.cn',
+        'Referer': 'https://www.trae.com.cn/',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Authorization': `Cloud-IDE-JWT ${token}`,
         'Content-Length': Buffer.byteLength(postData)

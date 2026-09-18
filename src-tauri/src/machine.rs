@@ -64,11 +64,12 @@ pub fn reset_machine_guid() -> Result<String> {
 }
 
 /// 获取 Trae IDE 数据目录路径
+/// 本项目仅适配国内版 Trae CN，其数据目录为 %APPDATA%\Trae CN（国际版为 %APPDATA%\Trae）
 #[cfg(target_os = "windows")]
 fn get_trae_data_path() -> Result<PathBuf> {
     let appdata = std::env::var("APPDATA")
         .map_err(|_| anyhow!("无法获取 APPDATA 环境变量"))?;
-    Ok(PathBuf::from(appdata).join("Trae"))
+    Ok(PathBuf::from(appdata).join("Trae CN"))
 }
 
 #[cfg(target_os = "macos")]
@@ -78,7 +79,7 @@ fn get_trae_data_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
-        .join("Trae"))
+        .join("Trae CN"))
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -119,16 +120,17 @@ pub fn set_trae_machine_id(new_id: &str) -> Result<()> {
 }
 
 /// 检查 Trae IDE 是否正在运行
+/// 国内版进程名为 "Trae CN.exe"（含空格），与国际版 "Trae.exe" 不同
 #[cfg(target_os = "windows")]
 pub fn is_trae_running() -> bool {
     let output = command_no_window("tasklist")
-        .args(["/FI", "IMAGENAME eq Trae.exe", "/NH"])
+        .args(["/FI", "IMAGENAME eq Trae CN.exe", "/NH"])
         .output();
 
     match output {
         Ok(out) => {
             let result = String::from_utf8_lossy(&out.stdout);
-            result.contains("Trae.exe")
+            result.contains("Trae CN.exe")
         }
         Err(_) => false,
     }
@@ -136,9 +138,9 @@ pub fn is_trae_running() -> bool {
 
 #[cfg(target_os = "macos")]
 pub fn is_trae_running() -> bool {
-    // 使用 pgrep -f 匹配进程路径中包含 "Trae.app" 的进程
+    // 使用 pgrep -f 匹配进程路径中包含 "Trae CN.app" 的进程（国内版）
     Command::new("pgrep")
-        .args(["-f", "Trae.app/Contents/MacOS"])
+        .args(["-f", "Trae CN.app/Contents/MacOS"])
         .output()
         .map(|out| out.status.success())
         .unwrap_or(false)
@@ -156,7 +158,7 @@ pub fn kill_trae() -> Result<()> {
 
     // 先尝试优雅关闭
     let _ = command_no_window("taskkill")
-        .args(["/IM", "Trae.exe"])
+        .args(["/IM", "Trae CN.exe"])
         .output();
 
     // 等待一小段时间
@@ -166,7 +168,7 @@ pub fn kill_trae() -> Result<()> {
     if is_trae_running() {
         println!("[INFO] 优雅关闭失败，正在强制关闭...");
         let output = command_no_window("taskkill")
-            .args(["/F", "/IM", "Trae.exe"])
+            .args(["/F", "/IM", "Trae CN.exe"])
             .output()
             .map_err(|e| anyhow!("关闭 Trae IDE 失败: {}", e))?;
 
@@ -218,9 +220,9 @@ pub fn kill_trae() -> Result<()> {
 
     println!("[INFO] 正在关闭 Trae IDE...");
 
-    // 使用 osascript 优雅关闭 Trae 应用
+    // 使用 osascript 优雅关闭 Trae 应用（国内版应用名为 "Trae CN"）
     let _ = Command::new("osascript")
-        .args(["-e", "tell application \"Trae\" to quit"])
+        .args(["-e", "tell application \"Trae CN\" to quit"])
         .output();
 
     // 等待一小段时间
@@ -230,7 +232,7 @@ pub fn kill_trae() -> Result<()> {
     if is_trae_running() {
         println!("[INFO] 优雅关闭失败，正在强制关闭...");
         let _ = Command::new("pkill")
-            .args(["-9", "-f", "Trae.app/Contents/MacOS"])
+            .args(["-9", "-f", "Trae CN.app/Contents/MacOS"])
             .output();
         
         // 再等待一下
@@ -285,7 +287,7 @@ pub fn save_trae_path(path: &str) -> Result<()> {
         return Err(anyhow!("指定的路径不存在"));
     }
     if !path.to_lowercase().ends_with(".exe") {
-        return Err(anyhow!("请选择 Trae.exe 文件"));
+        return Err(anyhow!("请选择 Trae CN.exe 文件"));
     }
     let config_path = get_trae_config_path()?;
     fs::write(&config_path, path)?;
@@ -315,21 +317,22 @@ pub fn save_trae_path(_path: &str) -> Result<()> {
 }
 
 /// 自动扫描 Trae IDE 安装路径
+/// 仅适配国内版 Trae CN（可执行文件为 "Trae CN.exe"），覆盖常见安装位置
 #[cfg(target_os = "windows")]
 pub fn scan_trae_path() -> Result<String> {
     use std::path::Path;
-    
+
     // 常见的 Windows 安装路径
     let possible_paths = [
         // 用户安装路径
-        &format!("{}\\AppData\\Local\\Programs\\Trae\\Trae.exe", std::env::var("LOCALAPPDATA").unwrap_or_default()),
-        &format!("{}\\AppData\\Local\\Trae\\Trae.exe", std::env::var("LOCALAPPDATA").unwrap_or_default()),
+        &format!("{}\\AppData\\Local\\Programs\\Trae CN\\Trae CN.exe", std::env::var("LOCALAPPDATA").unwrap_or_default()),
+        &format!("{}\\AppData\\Local\\Trae CN\\Trae CN.exe", std::env::var("LOCALAPPDATA").unwrap_or_default()),
         // 系统安装路径
-        r"C:\Program Files\Trae\Trae.exe",
-        r"C:\Program Files (x86)\Trae\Trae.exe",
+        r"C:\Program Files\Trae CN\Trae CN.exe",
+        r"C:\Program Files (x86)\Trae CN\Trae CN.exe",
         // 通过环境变量查找
-        &format!("{}\\Trae\\Trae.exe", std::env::var("ProgramFiles").unwrap_or_default()),
-        &format!("{}\\Trae\\Trae.exe", std::env::var("ProgramFiles(x86)").unwrap_or_default()),
+        &format!("{}\\Trae CN\\Trae CN.exe", std::env::var("ProgramFiles").unwrap_or_default()),
+        &format!("{}\\Trae CN\\Trae CN.exe", std::env::var("ProgramFiles(x86)").unwrap_or_default()),
     ];
     
     for path in possible_paths {
@@ -347,22 +350,23 @@ pub fn scan_trae_path() -> Result<String> {
     Err(anyhow!("未找到 Trae IDE，请手动设置路径"))
 }
 
-/// 从 Windows 注册表查找 Trae 安装路径
+/// 从 Windows 注册表查找 Trae CN 安装路径
+/// 卸载信息中的 DisplayName 含 "Trae CN"，/f 子串匹配可同时命中
 #[cfg(target_os = "windows")]
 fn scan_trae_from_registry() -> Result<String> {
     use std::process::Command;
-    
+
     // 尝试从注册表读取
     let reg_paths = [
         r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
     ];
-    
+
     for reg_path in &reg_paths {
         let output = Command::new("reg")
-            .args(&["query", reg_path, "/s", "/f", "Trae", "/k"])
+            .args(&["query", reg_path, "/s", "/f", "Trae CN", "/k"])
             .output();
-        
+
         if let Ok(output) = output {
             let stdout = String::from_utf8_lossy(&output.stdout);
             // 查找包含 InstallLocation 的行
@@ -371,7 +375,7 @@ fn scan_trae_from_registry() -> Result<String> {
                     let parts: Vec<&str> = line.splitn(3, "    ").collect();
                     if parts.len() >= 3 {
                         let install_path = parts[2].trim();
-                        let exe_path = format!("{}\\Trae.exe", install_path);
+                        let exe_path = format!("{}\\Trae CN.exe", install_path);
                         if Path::new(&exe_path).exists() {
                             return Ok(exe_path);
                         }
@@ -380,16 +384,16 @@ fn scan_trae_from_registry() -> Result<String> {
             }
         }
     }
-    
-    Err(anyhow!("注册表中未找到 Trae"))
+
+    Err(anyhow!("注册表中未找到 Trae CN"))
 }
 
 #[cfg(target_os = "macos")]
 pub fn scan_trae_path() -> Result<String> {
-    // 常见的 macOS 应用安装位置
+    // 常见的 macOS 应用安装位置（国内版为 "Trae CN.app"）
     let possible_paths = [
-        "/Applications/Trae.app",
-        &format!("{}/Applications/Trae.app", std::env::var("HOME").unwrap_or_default()),
+        "/Applications/Trae CN.app",
+        &format!("{}/Applications/Trae CN.app", std::env::var("HOME").unwrap_or_default()),
     ];
     
     for path in possible_paths {
@@ -519,12 +523,9 @@ pub fn write_trae_login_info(info: &TraeLoginInfo) -> Result<()> {
     let refresh_expired_at = now + chrono::Duration::days(180);
 
     // 构建 host URL
+    // 仅适配国内版：无论 region 为何，统一使用 CN 版 API 域名
     let host = if info.host.is_empty() {
-        match info.region.to_uppercase().as_str() {
-            "SG" => "https://api-sg-central.trae.ai",
-            "CN" => "https://api.trae.com.cn",
-            _ => "https://api-sg-central.trae.ai",
-        }
+        "https://api.trae.com.cn"
     } else {
         &info.host
     };
@@ -582,9 +583,15 @@ pub fn write_trae_login_info(info: &TraeLoginInfo) -> Result<()> {
     });
 
     // 写入登录信息
+    // 新版 Trae CN（≥2.3）仅接受 tc 加密格式的 iCubeAuthInfo，明文会被视为未登录；
+    // entitlement/serverData 仍保持明文（Trae 官方如此，见本机真实 storage.json）
+    let auth_plain = serde_json::to_string(&auth_info)
+        .map_err(|e| anyhow!("序列化登录信息失败: {}", e))?;
+    let auth_encrypted = crate::tc_crypto::encrypt_storage_value(&auth_plain)
+        .map_err(|e| anyhow!("加密登录信息失败: {}", e))?;
     obj.insert(
         "iCubeAuthInfo://icube.cloudide".to_string(),
-        serde_json::Value::String(serde_json::to_string(&auth_info).unwrap())
+        serde_json::Value::String(auth_encrypted)
     );
     obj.insert(
         "iCubeEntitlementInfo://icube.cloudide".to_string(),
@@ -607,6 +614,12 @@ pub fn switch_trae_account(info: &TraeLoginInfo, machine_id: Option<&str>, auto_
     kill_trae()?;
 
     let trae_path = get_trae_data_path()?;
+
+    // 0.1 清除 aha 层设备标识（`aha/TinyStorage` 的 `aha.device.device_id`）。
+    // 必须放在 kill 之后：Trae 运行中会把删除回写覆盖。best-effort，不阻断切换流程。
+    if let Err(e) = crate::device_reset::reset_aha_device_id(&trae_path) {
+        log::warn!("aha 设备标识重置失败（不阻断切换）: {}", e);
+    }
 
     // 1. 设置机器码（如果提供则使用，否则生成新的）
     let new_machine_id = match machine_id {
@@ -727,6 +740,15 @@ pub fn switch_trae_account(info: &TraeLoginInfo, machine_id: Option<&str>, auto_
 pub fn clear_trae_login_state() -> Result<()> {
     let trae_path = get_trae_data_path()?;
 
+    // 0. aha 层设备标识重置。本函数不像 `switch_trae_account` 那样先 `kill_trae`，
+    // 而 Trae 运行中会把删除回写覆盖，因此运行中直接跳过并告警——
+    // 不新增 kill 行为，避免改变本函数既有的「不杀进程」语义。
+    if is_trae_running() {
+        log::warn!("Trae 正在运行，跳过 aha 层设备标识重置（删除会被进程回写覆盖）");
+    } else if let Err(e) = crate::device_reset::reset_aha_device_id(&trae_path) {
+        log::warn!("aha 设备标识重置失败（不阻断清登流程）: {}", e);
+    }
+
     // 1. 生成新的机器码
     let new_machine_id = generate_machine_guid();
     let machine_id_path = trae_path.join("machineid");
@@ -821,22 +843,6 @@ pub fn clear_trae_login_state() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// 简单的 MD5 哈希（用于生成 telemetry.machineId 格式）
-fn md5_hash(input: &str) -> u128 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    input.hash(&mut hasher);
-    let h1 = hasher.finish();
-
-    let mut hasher2 = DefaultHasher::new();
-    format!("{}{}", input, h1).hash(&mut hasher2);
-    let h2 = hasher2.finish();
-
-    ((h1 as u128) << 64) | (h2 as u128)
 }
 
 /// 生成 telemetry.machineId（64位十六进制字符串）

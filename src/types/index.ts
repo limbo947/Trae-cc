@@ -9,6 +9,8 @@ export interface AccountBrief {
   created_at: number;
   machine_id: string | null;
   is_current: boolean; // 是否是当前 Trae IDE 正在使用的账号
+  /** 今日是否已签到（后端按本地日期口径判定） */
+  checked_in_today: boolean;
 }
 
 // 完整账号信息
@@ -29,6 +31,13 @@ export interface Account {
   updated_at: number;
   is_active: boolean;
   machine_id: string | null;
+  /** 签到设备号（X-Device-Id），与 machine_id 解耦 */
+  device_id?: string | null;
+  /** 签到冷却（跨批次记忆）：until 为 UTC 秒，reason 为机器可读码 */
+  checkin_cooldown?: {
+    until: number;
+    reason: string;
+  } | null;
 }
 
 // 使用量汇总
@@ -80,6 +89,33 @@ export interface UsageSummary {
 
   // 是否是美元计费模式 (新账号)
   is_dollar_billing: boolean;
+
+  // CN 版积分钟模型（v2 端点返回，国际版无此模式）
+  is_credits_billing: boolean;
+  credits_total: number;
+  credits_used: number;
+  credits_left: number;
+
+  // CN 积分按适用产品拆分：通用积分（TraeCode/TraeWork 均可用）与 Work 专属积分（仅 TraeWork）
+  credits_general_total: number;
+  credits_general_used: number;
+  credits_general_left: number;
+  credits_work_total: number;
+  credits_work_used: number;
+  credits_work_left: number;
+}
+
+// 签到结果（rate_limited：服务端限流，今日未签到，稍后重试即可；
+// cooldown：账号处于冷却期、本次未尝试，不是错误）
+export interface CheckinResult {
+  account_id: string;
+  account_name: string;
+  state: "ok" | "already" | "rate_limited" | "cooldown" | "failed";
+  detail: string;
+  /** 冷却截止时刻（UTC 秒）；i64::MAX 会超出 JS 安全整数，判定一律走 cooldown_reason */
+  cooldown_until?: number | null;
+  /** 冷却原因码：auth_expired / rate_limited / risk_control / server_error */
+  cooldown_reason?: string | null;
 }
 
 // 使用事件

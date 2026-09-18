@@ -1,23 +1,7 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-# Dependencies
+# ============ 依赖 ============
 node_modules
-.pnpm-store
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/sdks
-!.yarn/versions
 
-# Build outputs
+# ============ 构建产物（均由构建重新生成，不入库） ============
 dist
 dist-ssr
 .vite
@@ -25,76 +9,42 @@ dist-ssr
 target
 src-tauri/target
 src-tauri/bundle
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# OS files
-Thumbs.db
-.DS_Store
-
-# Tauri
+# Tauri 打包时下载的 WiX 工具链；gen/schemas 由 src-tauri/.gitignore 负责
 src-tauri/WixTools
 
-# Temporary files
+# ============ 日志 ============
+*.log
+npm-debug.log*
+
+# ============ 临时 / 备份文件 ============
 *.tmp
 *.temp
 *.bak
 *~
-machine*.rs.bak
-machine_temp*.txt
-machine_part*.rs
-machine_new.rs
-temp_repo/
 
-# Claude AI
-.claude/
-
-# Application data (optional, uncomment if you don't want to track)
-# *.db
-# *.sqlite
-accounts.txt
-
-# Env files
+# ============ 环境变量（.env.example 是模板，必须入库） ============
 .env
 .env.*
 !.env.example
 
-# Scripts (Python helper scripts at root only, not src-tauri/scripts)
-/scripts/
+# ============ 本地应用数据（含账号与凭据，禁止入库） ============
+accounts.txt
+*.db
+*.sqlite
+
+# ============ Python 辅助脚本产物（check_quota.py 等） ============
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-env/
 .pytest_cache/
 
-# Trae Scripts
-trae_scripts/
-
-# Trae IDE
+# ============ 编辑器 / IDE / 系统 ============
+.vscode/*
+!.vscode/extensions.json
+.idea
+.claude/
 .trae/
-
-# Test Artifacts
-screenshots/
-test-results/
-playwright-report/
-
-# Root level test scripts (not needed in production)
-/check_quota.mjs
-/check_quota.py
-/check_quota_real.mjs
-/inspect_signup.cjs
-/test_trae_signup.mjs
-
-# Local database files
-*.db
-*.sqlite
+.DS_Store
+Thumbs.db
+*.sw?

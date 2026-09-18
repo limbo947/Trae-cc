@@ -246,7 +246,7 @@ pub async fn browser_auto_login(
     let webview = WebviewWindowBuilder::new(
         &app,
         "auto_login",
-        WebviewUrl::External(Url::parse("https://www.trae.ai/login").unwrap()),
+        WebviewUrl::External(Url::parse("https://www.trae.com.cn/login").unwrap()),
     )
     .title("请登录 Trae 账号")
     .inner_size(1000.0, 720.0)

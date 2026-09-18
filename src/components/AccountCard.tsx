@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { UsageSummary } from "../types";
+import "./AccountCheckinBadge.css";
 
 interface AccountCardProps {
   account: {
@@ -13,12 +14,14 @@ interface AccountCardProps {
   };
   usage: UsageSummary | null;
   selected: boolean;
+  /** 今日签到状态（后端按本地日期判定，前端只负责渲染） */
+  checkedInToday: boolean;
   onSelect: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, id: string) => void;
   onToast?: (type: "success" | "error" | "warning" | "info", message: string, duration?: number) => void;
 }
 
-export function AccountCard({ account, usage, selected, onSelect, onContextMenu, onToast }: AccountCardProps) {
+export function AccountCard({ account, usage, selected, checkedInToday, onSelect, onContextMenu, onToast }: AccountCardProps) {
   const [copied, setCopied] = useState(false);
   const getUsageLevel = (used: number, limit: number) => {
     if (limit === 0) return "low";
@@ -47,19 +50,34 @@ export function AccountCard({ account, usage, selected, onSelect, onContextMenu,
   };
 
   const hasUsage = !!usage;
-  // 根据是否是美元计费模式显示不同的额度
+  // 根据计费模式显示不同的额度：CN 积分钟 > 美元计费 > 请求次数
+  const isCreditsBilling = usage?.is_credits_billing ?? false;
   const isDollarBilling = usage?.is_dollar_billing ?? false;
-  const totalUsed = isDollarBilling
+  const totalUsed = isCreditsBilling
+    ? (usage?.credits_used ?? 0)
+    : isDollarBilling
     ? (usage?.fast_dollar_used ?? 0)
     : (usage ? usage.fast_request_used + usage.extra_fast_request_used : 0);
-  const totalLimit = isDollarBilling
+  const totalLimit = isCreditsBilling
+    ? (usage?.credits_total ?? 0)
+    : isDollarBilling
     ? (usage?.fast_dollar_limit ?? 3)
     : (usage ? usage.fast_request_limit + usage.extra_fast_request_limit : 0);
-  const totalLeft = isDollarBilling
+  const totalLeft = isCreditsBilling
+    ? (usage?.credits_left ?? 0)
+    : isDollarBilling
     ? (usage?.fast_dollar_left ?? 3)
     : (usage ? usage.fast_request_left + usage.extra_fast_request_left : 0);
   const usagePercent = totalLimit > 0 ? Math.round((totalUsed / totalLimit) * 100) : 0;
   const usageLevel = getUsageLevel(totalUsed, totalLimit);
+
+  // CN 积分按适用产品拆分展示：通用积分与 Work 专属积分
+  const generalTotal = usage?.credits_general_total ?? 0;
+  const generalUsed = usage?.credits_general_used ?? 0;
+  const workTotal = usage?.credits_work_total ?? 0;
+  const workUsed = usage?.credits_work_used ?? 0;
+  const generalPercent = generalTotal > 0 ? Math.min(Math.round((generalUsed / generalTotal) * 100), 100) : 0;
+  const workPercent = workTotal > 0 ? Math.min(Math.round((workUsed / workTotal) * 100), 100) : 0;
 
   const isTokenExpired = false; // TODO: 根据实际 token 过期时间判断
 
@@ -120,6 +138,9 @@ export function AccountCard({ account, usage, selected, onSelect, onContextMenu,
             </button>
           </div>
           <div className="card-badges">
+            <span className={`badge checkin ${checkedInToday ? "done" : "pending"}`}>
+              {checkedInToday ? "已签到" : "未签到"}
+            </span>
             {(usage?.plan_type || account.plan_type) !== "Free" && (
               <span className="badge pro">PRO</span>
             )}
@@ -201,10 +222,10 @@ export function AccountCard({ account, usage, selected, onSelect, onContextMenu,
           )}
         </div>
       ) : (
-        // 普通模式 - 显示 Fast Requests
+        // 普通模式 - 显示额度（CN 积分钟）或 Fast Requests
         <div className="card-usage">
           <div className="usage-header">
-            <span className="usage-label">Fast Requests</span>
+            <span className="usage-label">{isCreditsBilling ? "额度" : "Fast Requests"}</span>
             <span className={`usage-percent ${usageLevel}`}>{usagePercent}%</span>
           </div>
           <div className="usage-bar">
@@ -220,6 +241,40 @@ export function AccountCard({ account, usage, selected, onSelect, onContextMenu,
             </span>
             <span className="usage-left">剩余 {hasUsage ? Math.round(totalLeft) : "-"}</span>
           </div>
+
+          {/* CN 版积分分开显示：通用积分（TraeCode/TraeWork 通用）与 Work 专属积分（仅 TraeWork） */}
+          {isCreditsBilling && (generalTotal > 0 || workTotal > 0) && (
+            <div className="usage-compact-details" style={{ marginTop: "10px" }}>
+              {generalTotal > 0 && (
+                <div className="usage-compact-item">
+                  <div className="compact-item-header">
+                    <span className="compact-icon">🌐</span>
+                    <span className="compact-name">通用积分</span>
+                    <span className="compact-value">
+                      剩 {Math.round(usage?.credits_general_left ?? 0)} / {Math.round(generalTotal)}
+                    </span>
+                  </div>
+                  <div className="compact-bar">
+                    <div className="compact-bar-fill basic" style={{ width: `${generalPercent}%` }} />
+                  </div>
+                </div>
+              )}
+              {workTotal > 0 && (
+                <div className="usage-compact-item">
+                  <div className="compact-item-header">
+                    <span className="compact-icon">💼</span>
+                    <span className="compact-name">Work 专属积分</span>
+                    <span className="compact-value">
+                      剩 {Math.round(usage?.credits_work_left ?? 0)} / {Math.round(workTotal)}
+                    </span>
+                  </div>
+                  <div className="compact-bar">
+                    <div className="compact-bar-fill work" style={{ width: `${workPercent}%` }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

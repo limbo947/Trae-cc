@@ -25,6 +25,12 @@ impl AccountManager {
                 account.machine_id = Some(Uuid::new_v4().to_string());
                 changed = true;
             }
+            // 签到设备号回填：只补空值，**绝不无条件重算**——重算会把所有账号静默换号，
+            // 服务端视为新设备（等价于批量重置），也会让当日已签到判定失效
+            if account.device_id.as_deref().map_or(true, |v| v.trim().is_empty()) {
+                account.device_id = Some(crate::api::device_id::resolve_device_id(account));
+                changed = true;
+            }
         }
 
         let manager = Self { store, data_path };
@@ -780,6 +786,7 @@ impl AccountManager {
         if let Some(acc) = self.store.accounts.iter_mut().find(|a| a.id == account_id) {
             acc.jwt_token = Some(token_result.token);
             acc.token_expired_at = Some(token_result.expired_at);
+            crate::api::checkin_guard::clear_auth_cooldown(acc);
             acc.updated_at = chrono::Utc::now().timestamp();
         }
 
@@ -1186,14 +1193,14 @@ impl AccountManager {
 
     /// 从 Trae IDE 读取当前登录账号
     pub async fn read_trae_ide_account(&mut self) -> Result<Option<Account>> {
-        // 获取 Trae IDE 配置文件路径（跨平台支持）
+        // 获取 Trae IDE 配置文件路径（跨平台支持，仅适配国内版 Trae CN）
         #[cfg(target_os = "windows")]
         let trae_data_path = {
             let appdata = std::env::var("APPDATA")
                 .map_err(|_| anyhow!("无法获取 APPDATA 环境变量"))?;
-            PathBuf::from(appdata).join("Trae")
+            PathBuf::from(appdata).join("Trae CN")
         };
-        
+
         #[cfg(target_os = "macos")]
         let trae_data_path = {
             let home = std::env::var("HOME")
@@ -1201,7 +1208,7 @@ impl AccountManager {
             PathBuf::from(home)
                 .join("Library")
                 .join("Application Support")
-                .join("Trae")
+                .join("Trae CN")
         };
         
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -1418,25 +1425,76 @@ impl AccountManager {
         }
         Ok(())
     }
-}
 
-async fn fetch_account_info_internal(cookies: String, password: Option<String>) -> Result<Account> {
-    let mut client = TraeApiClient::new(&cookies)?;
-    let token_result = client.get_user_token().await?;
-    let user_info = client.get_user_info().await?;
-    
-    let mut account = Account::new(
-        user_info.screen_name.clone(),
-        user_info.non_plain_text_email.unwrap_or_default(),
-        cookies,
-        token_result.user_id,
-        token_result.tenant_id,
-    );
-    account.avatar_url = user_info.avatar_url;
-    account.region = user_info.region;
-    account.jwt_token = Some(token_result.token);
-    account.token_expired_at = Some(token_result.expired_at);
-    account.password = password;
-    
-    Ok(account)
+    /// 列出参与签到的账号；`only_pending_today` 为 true 时只返回「今日未签到」的账号
+    /// （方案B 自动签到用；手动全量签到传 false）
+    pub fn list_accounts_for_checkin(&self, today: &str, only_pending_today: bool) -> Vec<Account> {
+        self.store
+            .accounts
+            .iter()
+            .filter(|a| a.is_active)
+            .filter(|a| !only_pending_today || a.last_checkin_date.as_deref() != Some(today))
+            .cloned()
+            .collect()
+    }
+
+    /// 批次签到后统一落盘：成功/Already 写日期、失败项写冷却，一次 persist
+    /// 为什么整批一次写：批次运行期间不落盘冷却（防 10 分钟冷却拦死 30 秒后的重试轮），
+    /// 全部轮次结束后才统一写，避免每账号一次 `save_store` 的多次写盘窗口。
+    pub fn apply_checkin_outcomes(
+        &mut self,
+        outcomes: &[crate::api::checkin_guard::CheckinOutcome],
+    ) -> Result<()> {
+        if outcomes.is_empty() {
+            return Ok(());
+        }
+        for outcome in outcomes {
+            if let Some(acc) = self.store.accounts.iter_mut().find(|a| a.id == outcome.account_id) {
+                // 日期与冷却互斥：写日期即意味着旧冷却已失效（重试轮内冷却可能刚好到期）
+                match (&outcome.date, &outcome.cooldown) {
+                    (Some(date), _) => {
+                        acc.last_checkin_date = Some(date.clone());
+                        acc.checkin_cooldown = None;
+                    }
+                    (None, Some(cooldown)) => {
+                        acc.checkin_cooldown = Some(cooldown.clone());
+                    }
+                    (None, None) => continue,
+                }
+                acc.updated_at = chrono::Utc::now().timestamp();
+            }
+        }
+        self.save_store()
+    }
+
+    /// 重置单账号签到设备号：换新号 + 清冷却 + 清已签到日期，单次落盘
+    ///
+    /// 为什么清 `last_checkin_date`：9095 时日期已被写入（Already 语义），不清则重置后
+    /// 自动签到仍跳过该账号，自救无效。
+    /// 为什么清冷却：让重置后立即可试。注意 9074 是账号级限流、与设备号无关，重置不保证
+    /// 解除限流——若复现会重新冷却，代价仅是多打一次请求。
+    pub fn reset_account_device_id(&mut self, account_id: &str, new_device_id: String) -> Result<()> {
+        if let Some(acc) = self.store.accounts.iter_mut().find(|a| a.id == account_id) {
+            acc.device_id = Some(new_device_id);
+            acc.last_checkin_date = None;
+            acc.checkin_cooldown = None;
+            acc.updated_at = chrono::Utc::now().timestamp();
+            self.save_store()?;
+        }
+        Ok(())
+    }
+
+    /// 保存刷新后的 Token（签到流程复用：取锁读 → 无锁网络 → 取锁写）
+    pub fn save_refreshed_token(&mut self, account_id: &str, token: &str, expired_at: &str) -> Result<()> {
+        if let Some(acc) = self.store.accounts.iter_mut().find(|a| a.id == account_id) {
+            acc.jwt_token = Some(token.to_string());
+            acc.token_expired_at = Some(expired_at.to_string());
+            // Token 刷新成功说明「需重新登录」的冷却解除了，仅清 auth_expired——
+            // 刷新 Token 不该解除 9074 限流冷却（见 checkin_guard::clear_auth_cooldown）
+            crate::api::checkin_guard::clear_auth_cooldown(acc);
+            acc.updated_at = chrono::Utc::now().timestamp();
+            self.save_store()?;
+        }
+        Ok(())
+    }
 }

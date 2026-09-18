@@ -23,15 +23,14 @@ print()
 headers = {
     'Content-Type': 'application/json',
     'Accept': 'application/json, text/plain, */*',
-    'Origin': 'https://www.trae.ai',
-    'Referer': 'https://www.trae.ai/',
+    'Origin': 'https://www.trae.com.cn',
+    'Referer': 'https://www.trae.com.cn/',
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Authorization': f'Cloud-IDE-JWT {token}'
 }
 
 endpoints = [
-    'https://api-sg-central.trae.ai',
-    'https://api-us-east.trae.ai'
+    'https://api.trae.com.cn'
 ]
 
 for base in endpoints:

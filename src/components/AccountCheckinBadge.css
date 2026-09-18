@@ -1,0 +1,44 @@
+/* 账号名后的签到状态徽标（卡片视图与列表视图共用）
+   为什么不写进 App.css：该文件已严重超限（见 AGENTS.md §4），新增样式按约定放组件级 CSS */
+
+/* 卡片视图：复用 .card-badges .badge 的基础样式，只补配色 */
+.card-badges .badge.checkin.done {
+  background: var(--success);
+  color: white;
+}
+
+.card-badges .badge.checkin.pending {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+/* 列表视图：让徽标紧跟账号名之后，名字过长时先压缩名字而不是把徽标挤走 */
+.list-item-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.list-item-name-row .list-item-email {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.checkin-tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.checkin-tag.done {
+  background: var(--success);
+  color: white;
+}
+
+.checkin-tag.pending {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}

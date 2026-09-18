@@ -168,7 +168,7 @@ export function Stats({ accounts, hasLoaded = true }: StatsProps) {
         }}>
           <div className="empty-icon" style={{ fontSize: "48px", marginBottom: "16px" }}>👤</div>
           <h3 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>未设置当前账号</h3>
-          <p style={{ color: "var(--text-muted)", marginBottom: "24px" }}>请在"账号管理"中右键点击账号，选择"设为当前使用"</p>
+          <p style={{ color: "var(--text-muted)", marginBottom: "24px" }}>请在“账号管理”中右键点击账号，选择“切换账号”</p>
         </div>
       )}
 
@@ -205,7 +205,7 @@ export function Stats({ accounts, hasLoaded = true }: StatsProps) {
           background: "var(--danger-bg)",
           borderRadius: "var(--radius-lg)",
           color: "var(--danger)",
-          border: "1px solid rgba(245, 101, 101, 0.2)"
+          border: "1px solid var(--status-error-surface-l1)"
         }}>
           <div style={{ fontSize: "40px", marginBottom: "12px" }}>⚠️</div>
           <p style={{ fontSize: "16px", marginBottom: "8px" }}>{statsError}</p>
