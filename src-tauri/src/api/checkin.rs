@@ -572,6 +572,12 @@ pub async fn checkin_one_account(manager: &Mutex<AccountManager>, account_id: &s
         guard.get_account(account_id)?
     };
 
+    // 批量入口已按 `is_traecode` 过滤（见 list_accounts_for_checkin），单账号入口必须
+    // 独立拦一次：右键菜单是按 id 直接调的，不经过列表过滤
+    if !account.is_traecode() {
+        return Err(anyhow!("TraeWork 账号不支持签到"));
+    }
+
     let (mut results, pending) = snapshot_cooldowns(std::slice::from_ref(&account));
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let (round_results, _) = run_round(manager, pending).await?;

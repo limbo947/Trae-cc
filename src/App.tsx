@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { Sidebar } from "./components/Sidebar";
 import { AccountCard } from "./components/AccountCard";
@@ -13,6 +12,7 @@ import { ConfirmModal } from "./components/ConfirmModal";
 import { Stats } from "./pages/Stats";
 import { Settings } from "./pages/Settings";
 import { About } from "./pages/About";
+import { TraeworkPanel } from "./components/TraeworkPanel";
 
 import * as api from "./api";
 import type { Account, AccountBrief, AppSettings, CheckinResult, UsageSummary } from "./types";
@@ -21,10 +21,23 @@ import "./App.css";
 interface AccountWithUsage extends AccountBrief {
   usage?: UsageSummary | null;
   password?: string | null;
+  /** 列表 brief 不含用户 ID，打开详情时用完整账号补齐 */
+  user_id?: string;
 }
 
 type ViewMode = "grid" | "list";
 const USAGE_CACHE_KEY = "trae_usage_cache_v1";
+
+/**
+ * 是否为 TraeWork 账号。
+ *
+ * 为什么按「等于 traework」而不是「不等于 traecode」判定：旧版 accounts.json 没有 `app`
+ * 字段，加载后由后端 `serde(default)` 补成 "traecode"，但前端在类型层面仍可能是 undefined。
+ * 用「等于 traework」可以在字段缺失时安全地判为 traecode，不会把老账号误锁在 TraeWork 面板外。
+ */
+function isTraeworkAccount(account: { app?: string }): boolean {
+  return account.app === "traework";
+}
 
 /**
  * 把冷却状态渲染成用户可读文案。
@@ -105,10 +118,8 @@ function App() {
     initialEmail?: string;
   } | null>(null);
 
-  const quickRegisterNoticeRef = useRef<Map<string, number>>(new Map());
   const toastDedupRef = useRef<Map<string, number>>(new Map());
   const autoCheckinRanRef = useRef(false);
-  const quickRegisterShowWindow = appSettings?.quick_register_show_window ?? false;
 
   // 网络状态监听
   const offlineToastIdRef = useRef<string | null>(null);
@@ -212,16 +223,9 @@ function App() {
       .catch(() => {
         if (active) {
           setAppSettings({
-            quick_register_show_window: false,
             auto_refresh_enabled: true,
             privacy_auto_enable: true,
             auto_start_enabled: false,
-            api_key: "9201",
-            custom_tempmail_config: {
-              api_url: "",
-              secret_key: "",
-              email_domain: "",
-            },
           });
         }
       });
@@ -229,37 +233,6 @@ function App() {
       active = false;
     };
   }, []);
-
-
-
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    listen<{ id?: string; message: string }>("quick_register_notice", (event) => {
-      if (quickRegisterShowWindow) {
-        return;
-      }
-      const { id, message } = event.payload || {};
-      if (!message) return;
-      const key = id || message;
-      const now = Date.now();
-      const last = quickRegisterNoticeRef.current.get(key);
-      if (last && now - last < 800) {
-        return;
-      }
-      quickRegisterNoticeRef.current.set(key, now);
-      addToast("success", message, 2500);
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => {});
-
-    return () => {
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, [addToast, quickRegisterShowWindow]);
 
   const refreshUsageForAccounts = useCallback(
     async (list: AccountBrief[]) => {
@@ -300,9 +273,12 @@ function App() {
       setAccounts(accountsWithUsage);
       setError(null);
       setHasLoaded(true);
-      updateUsageCache({}, list.map((a) => a.id));
+      // TraeWork 账号没有可查额度的凭据（登录态在客户端 vscdb 里），把它们排除在额度拉取之外；
+      // 仍保留在 accounts 里供 TraeWork 面板使用
+      const usageTargets = list.filter((a) => !isTraeworkAccount(a));
+      updateUsageCache({}, usageTargets.map((a) => a.id));
       setLoading(false);
-      void refreshUsageForAccounts(list);
+      void refreshUsageForAccounts(usageTargets);
     } catch (err: any) {
       setError(err.message || "加载账号失败");
       setHasLoaded(true);
@@ -516,6 +492,9 @@ function App() {
         is_current: false,
         // 新添加的账号今日必然未签到（AccountBrief 的派生字段，Account 上没有）
         checked_in_today: false,
+        // 添加账号的三条路径（浏览器登录 / 读取 Trae / 导入）都只产出 TraeCode 账号
+        app: account.app ?? "traecode",
+        uid: account.uid ?? null,
         usage: null,
         password: account.password ?? null,
       };
@@ -554,12 +533,13 @@ function App() {
     });
   };
 
-  // 全选/取消全选
+  // 全选/取消全选（TraeCode 账号范围；TraeWork 账号不参与批量操作）
   const handleSelectAll = () => {
-    if (selectedIds.size === accounts.length) {
+    const selectable = accounts.filter((account) => !isTraeworkAccount(account));
+    if (selectedIds.size === selectable.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(accounts.map((account) => account.id)));
+      setSelectedIds(new Set(selectable.map((account) => account.id)));
     }
   };
 
@@ -678,6 +658,7 @@ function App() {
         ...account,
         email: full.email,
         password: full.password ?? null,
+        user_id: full.user_id,
       });
     } catch (err: any) {
       addToast("error", err.message || "获取账号详情失败");
@@ -911,9 +892,16 @@ function App() {
   };
 
   const normalizedFilter = (emailFilter || "").trim().toLowerCase();
+  // TraeCode 账号子集：账号管理页/统计页/批量操作都只处理它，TraeWork 账号走独立面板
+  //（两套切换机制相反，混在一个列表里会让用户按同一预期操作）
+  const traecodeAccounts = accounts.filter((account) => !isTraeworkAccount(account));
   const visibleAccounts = Array.isArray(accounts)
     ? [...accounts]
         .filter((account) => {
+          // TraeWork 账号不在本页展示
+          if (isTraeworkAccount(account)) {
+            return false;
+          }
           // 邮箱搜索过滤
           if (normalizedFilter && !(account.email || account.name || "").toLowerCase().includes(normalizedFilter)) {
             return false;
@@ -949,13 +937,21 @@ function App() {
         )}
 
         {currentPage === "stats" && (
-          <Stats accounts={accounts} hasLoaded={hasLoaded} />
+          <Stats accounts={traecodeAccounts} hasLoaded={hasLoaded} />
+        )}
+
+        {currentPage === "traework" && (
+          <TraeworkPanel
+            accounts={accounts}
+            onToast={addToast}
+            onAccountsChanged={loadAccounts}
+          />
         )}
 
         {currentPage === "accounts" && (
           <>
             <main className="app-main">
-              {accounts.length > 0 && (
+              {traecodeAccounts.length > 0 && (
                 <div className="toolbar">
                   <div className="toolbar-left">
                     <button
@@ -964,7 +960,7 @@ function App() {
                       onClick={handleSelectAll}
                       style={{ padding: "8px 14px" }}
                     >
-                      {selectedIds.size === accounts.length && accounts.length > 0 ? "取消全选" : "全选"}
+                      {selectedIds.size === traecodeAccounts.length && traecodeAccounts.length > 0 ? "取消全选" : "全选"}
                     </button>
                     <div className="toolbar-search">
                       <svg
@@ -1218,7 +1214,6 @@ function App() {
         onClose={() => setShowAddModal(false)}
         onToast={addToast}
         onAccountAdded={handleAccountAdded}
-        quickRegisterShowWindow={quickRegisterShowWindow}
         onImportAccounts={handleImportAccounts}
         onExportAccounts={handleExportAccounts}
         canExport={accounts.length > 0}

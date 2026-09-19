@@ -686,6 +686,52 @@ impl AccountManager {
             .ok_or_else(|| anyhow!("账号不存在"))
     }
 
+    /// 按 uid 落库/更新一个 TraeWork 账号，返回落库后的记录
+    ///
+    /// 为什么以 uid 为唯一键而不是新建一条：TraeWork 的登录态在 TraeWork 侧，账号库只是
+    /// 「槽位索引」。「保存当前登录态」可能被同一账号反复触发，若每次都追加新记录，账号列表
+    /// 会迅速被同一 uid 的重复项撑爆，且切换时无法判断该恢复哪个槽。
+    ///
+    /// 为什么不改 `current_account_id`：TraeWork 的「当前账号」以快照目录里的
+    /// `current_account.txt` 为真源（与参考实现一致）。写进 `current_account_id` 会与
+    /// traecode 的「Trae IDE 当前账号」语义冲突——两个应用可以同时登录不同账号。
+    pub fn upsert_traework_account(&mut self, uid: &str, name: Option<String>) -> Result<Account> {
+        let uid = uid.trim();
+        if uid.is_empty() {
+            return Err(anyhow!("TraeWork uid 不能为空"));
+        }
+
+        if let Some(existing) = self
+            .store
+            .accounts
+            .iter_mut()
+            .find(|a| a.app == APP_TRAEWORK && a.uid.as_deref() == Some(uid))
+        {
+            // 槽名缺失就地补齐（历史数据/手工导入可能没有）
+            if existing.slot().is_none() {
+                existing.snapshot_slot = Some(uid.to_string());
+            }
+            // 仅当调用方给了更好的名字（例如发现到邮箱）才覆盖，避免把用户手工改的名字打回 uid
+            if let Some(n) = name.filter(|n| !n.trim().is_empty()) {
+                existing.name = n;
+            }
+            existing.updated_at = chrono::Utc::now().timestamp();
+            let updated = existing.clone();
+            self.save_store()?;
+            return Ok(updated);
+        }
+
+        let mut account = Account::new_traework(
+            uid.to_string(),
+            name.filter(|n| !n.trim().is_empty())
+                .unwrap_or_else(|| uid.to_string()),
+        );
+        account.snapshot_slot = Some(uid.to_string());
+        self.store.accounts.push(account.clone());
+        self.save_store()?;
+        Ok(account)
+    }
+
     /// 获取账号使用量
     pub async fn get_account_usage(&mut self, account_id: &str) -> Result<UsageSummary> {
         let account = self
@@ -695,6 +741,12 @@ impl AccountManager {
             .find(|a| a.id == account_id)
             .ok_or_else(|| anyhow!("账号不存在"))?
             .clone();
+
+        // TraeWork 账号没有可查询额度的凭据（登录态在客户端 vscdb 里，本工具不持有）；
+        // 直接给出可理解的错误，避免前端收到「Token 无效」这类指向错误方向的提示
+        if !account.is_traecode() {
+            return Err(anyhow!("TraeWork 账号不支持额度查询"));
+        }
 
         // 根据账号类型选择不同的方式获取使用量
         let summary = if let Some(token) = &account.jwt_token {
@@ -774,6 +826,12 @@ impl AccountManager {
             .find(|a| a.id == account_id)
             .ok_or_else(|| anyhow!("账号不存在"))?
             .clone();
+
+        // TraeWork 账号的登录态在客户端自己的 state.vscdb 里，不经过本工具的 Token 体系；
+        // 放行只会得到「账号没有 Cookies」这种误导性错误
+        if !account.is_traecode() {
+            return Err(anyhow!("TraeWork 账号的登录态由客户端维护，无需刷新 Token"));
+        }
 
         // 检查是否有 cookies
         if account.cookies.trim().is_empty() {
@@ -1432,6 +1490,9 @@ impl AccountManager {
         self.store
             .accounts
             .iter()
+            // TraeWork 账号没有 Cookies/JWT，签到的网络请求必然失败；不在这里拦掉的话，
+            // 每次签到都会给它们各写一条「失败 + 冷却」，把账号列表噪音化
+            .filter(|a| a.is_traecode())
             .filter(|a| a.is_active)
             .filter(|a| !only_pending_today || a.last_checkin_date.as_deref() != Some(today))
             .cloned()

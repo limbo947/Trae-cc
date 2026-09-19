@@ -35,7 +35,39 @@ pub struct Account {
     /// 签到冷却（跨批次记忆）：批次内失败不落盘，全部轮次结束后统一写入
     #[serde(default)]
     pub checkin_cooldown: Option<CheckinCooldown>,
+    /// 账号归属应用：`traecode`（Trae CN，本工具原有能力）或 `traework`（TRAE SOLO CN）
+    ///
+    /// 为什么必须落盘而不是运行时推断：两个应用的切换机制是**相反**的——traecode 靠
+    /// 改写 storage.json 登录态，TraeWork 靠整目录快照覆盖（其登录真源在 state.vscdb，
+    /// 写 JSON 无效）。没有这个判据就无法决定一条账号记录该走哪条链路。
+    /// `default = "default_app"` 保证 1.0.5 之前的 accounts.json（无此字段）加载后全部
+    /// 视为 traecode，不丢账号。
+    #[serde(default = "default_app")]
+    pub app: String,
+    /// TraeWork 的 Cloud-IDE uid（来源 `storage.json` 的 `icube_gtm.users` 键名）
+    ///
+    /// 为什么单独成字段而不是复用 `user_id`：`user_id` 是 traecode 从 API 拿到的用户 id，
+    /// 语义与取值域都不同；TraeWork 的 uid 只能从本机登录态证据推导。混用会让两条链路
+    /// 互相污染（例如导出的账号被错误地当成同一身份去重）。
+    #[serde(default)]
+    pub uid: Option<String>,
+    /// 快照槽名（默认即 uid）
+    ///
+    /// 为什么允许与 uid 不等：槽位是磁盘上的目录名，将来若要支持「同一 uid 多份快照」
+    /// 或用户手工改名，只需改这个字段而不必动数据格式。
+    #[serde(default)]
+    pub snapshot_slot: Option<String>,
 }
+
+/// `Account.app` 的 serde 默认值（旧数据兼容）：缺失即视为 traecode 账号
+fn default_app() -> String {
+    APP_TRAECODE.to_string()
+}
+
+/// traecode 应用标识
+pub const APP_TRAECODE: &str = "traecode";
+/// TraeWork（TRAE SOLO CN）应用标识
+pub const APP_TRAEWORK: &str = "traework";
 
 /// 签到冷却状态
 ///
@@ -94,7 +126,60 @@ impl Account {
             device_id,
             last_checkin_date: None,
             checkin_cooldown: None,
+            app: APP_TRAECODE.to_string(),
+            uid: None,
+            snapshot_slot: None,
         }
+    }
+
+    /// 构造 TraeWork 账号记录
+    ///
+    /// 为什么与 `new` 分开而不是加参数：TraeWork 账号不需要 cookies/jwt/device_id
+    /// （那些是 traecode 的额度与签到链路所需），强行共用一个签名会让每个调用点都要
+    /// 传一堆空串，且容易误把 traecode 的派生逻辑（如 device_id 由 user_id 派生）
+    /// 套到 uid 上——uid 与 device_id 完全无关，套用会产生错误的设备号。
+    pub fn new_traework(uid: String, name: String) -> Self {
+        let now = chrono::Utc::now().timestamp();
+        Self {
+            id: uuid_simple(),
+            name,
+            email: String::new(),
+            avatar_url: String::new(),
+            cookies: String::new(),
+            jwt_token: None,
+            token_expired_at: None,
+            password: None,
+            user_id: uid.clone(),
+            tenant_id: String::new(),
+            region: String::new(),
+            plan_type: "Free".to_string(),
+            created_at: now,
+            updated_at: now,
+            is_active: true,
+            // TraeWork 的机器身份随快照走（machineid 在快照白名单内），
+            // 这里不再单独生成，避免出现「账号库里的 machine_id 与快照里的实际值不一致」
+            // 这种无法自洽的第二真源
+            machine_id: None,
+            device_id: None,
+            last_checkin_date: None,
+            checkin_cooldown: None,
+            app: APP_TRAEWORK.to_string(),
+            uid: Some(uid),
+            snapshot_slot: None,
+        }
+    }
+
+    /// 是否 traecode 账号（额度查询/签到/Token 刷新等链路的准入判据）
+    pub fn is_traecode(&self) -> bool {
+        self.app != APP_TRAEWORK
+    }
+
+    /// 快照槽名：显式值优先，其次 uid；两者皆空则 None（调用方须报错，不得兜底）
+    pub fn slot(&self) -> Option<&str> {
+        self.snapshot_slot
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| self.uid.as_deref().filter(|s| !s.trim().is_empty()))
     }
 }
 
@@ -133,6 +218,10 @@ pub struct AccountBrief {
     pub is_current: bool,
     /// 今日是否已签到（后端用本地日期口径判定，避免前端 UTC 口径重算出错）
     pub checked_in_today: bool,
+    /// 归属应用（traecode / traework）：前端据此分流到两套界面与操作
+    pub app: String,
+    /// TraeWork uid（traecode 账号恒为 None）
+    pub uid: Option<String>,
 }
 
 impl From<&Account> for AccountBrief {
@@ -148,6 +237,8 @@ impl From<&Account> for AccountBrief {
             machine_id: account.machine_id.clone(),
             is_current: false, // 默认为 false，由 AccountManager 设置
             checked_in_today: account.is_checked_in_today(),
+            app: account.app.clone(),
+            uid: account.uid.clone(),
         }
     }
 }
@@ -166,6 +257,8 @@ impl AccountBrief {
             machine_id: account.machine_id.clone(),
             is_current,
             checked_in_today: account.is_checked_in_today(),
+            app: account.app.clone(),
+            uid: account.uid.clone(),
         }
     }
 }

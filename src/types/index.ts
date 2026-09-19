@@ -11,6 +11,10 @@ export interface AccountBrief {
   is_current: boolean; // 是否是当前 Trae IDE 正在使用的账号
   /** 今日是否已签到（后端按本地日期口径判定） */
   checked_in_today: boolean;
+  /** 归属应用：traecode（Trae CN）或 traework（TRAE SOLO CN） */
+  app: string;
+  /** TraeWork uid；traecode 账号为 null */
+  uid: string | null;
 }
 
 // 完整账号信息
@@ -38,6 +42,71 @@ export interface Account {
     until: number;
     reason: string;
   } | null;
+  /** 归属应用：traecode（Trae CN）或 traework（TRAE SOLO CN） */
+  app?: string;
+  /** TraeWork uid */
+  uid?: string | null;
+  /** 快照槽名（默认等于 uid） */
+  snapshot_slot?: string | null;
+}
+
+// ============ TraeWork（TRAE SOLO CN）============
+//
+// TraeWork 采用「登录态快照 / 恢复」而非改写登录态：其登录真源是 storage.json 与
+// state.vscdb 双源，后者是带加密 secret storage 的 SQLite，写 JSON 覆盖不到。
+
+/** uid 推导结果（置信度不足时 uid 为 null，前端不得猜测） */
+export interface TraeworkUidEvidence {
+  uid: string | null;
+  confident: boolean;
+  candidates: string[];
+  reason: string;
+}
+
+/** 单个快照槽状态 */
+export interface TraeworkSlotStatus {
+  slot: string;
+  exists: boolean;
+  bak_exists: boolean;
+  bytes: number;
+  modified_at: number | null;
+}
+
+/** TraeWork 概览 */
+export interface TraeworkOverview {
+  current_slot: string | null;
+  running: boolean;
+  exe_path: string | null;
+  snapshots: TraeworkSlotStatus[];
+  orphan_slots: string[];
+}
+
+/** 单条执行步骤 */
+export interface TraeworkStep {
+  stage: string;
+  status: "info" | "running" | "ok" | "warn" | "error" | "skip";
+  message: string;
+}
+
+/** 保存 / 切换动作的结果 */
+export interface TraeworkActionResult {
+  message: string;
+  steps: TraeworkStep[];
+  account: AccountBrief | null;
+}
+
+/** 修复槽位结果 */
+export interface TraeworkReconcile {
+  message: string;
+  steps: TraeworkStep[];
+  /** 成功归位的 [原目录名, 纠正后的账号 id] */
+  renamed: [string, string][];
+  /** 未能自动处理的目录及原因 */
+  skipped: string[];
+  /** 修复后现存的槽位 */
+  slots: string[];
+  /** 清理白名单外历史文件释放的字节数 */
+  freed_bytes: number;
 }
 
 // 使用量汇总
@@ -147,19 +216,10 @@ export interface ApiError {
   message: string;
 }
 
-export interface CustomTempMailConfig {
-  api_url: string;
-  secret_key: string;
-  email_domain: string;
-}
-
 export interface AppSettings {
-  quick_register_show_window: boolean;
   auto_refresh_enabled: boolean;
   privacy_auto_enable: boolean;
   auto_start_enabled: boolean;
-  api_key: string; // 用于访问验证码获取服务
-  custom_tempmail_config: CustomTempMailConfig;
 }
 
 // 用户统计数据

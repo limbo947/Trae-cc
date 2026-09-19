@@ -7,6 +7,24 @@
 
 ---
 
+## [未发布]
+
+### ✨ 新增功能
+
+- 新增 TraeWork（TRAE SOLO CN）账号管理：侧边栏独立页面，支持「保存当前登录态」与一键切换。TraeWork 的登录真源是 `storage.json` + `state.vscdb` 双源（后者为带加密 secret storage 的 SQLite），无法像 TraeCode 那样改写登录态，因此采用**登录态快照 / 恢复**：关闭客户端 → 备份现场 → 覆盖目标账号快照 → 重启。含 uid 证据链推导（置信度不足时拒绝识别而非猜测）、`.bak` 单代回退、快照体积展示与删除、可执行文件五级自动定位
+
+### 🗑️ 移除
+
+- 移除"快速注册"与"扫码领号"功能：添加账号弹窗只保留浏览器登录（含"从 Trae 读取"与导入/导出），同步删除 `QuickRegisterModal` / `ErrorModal` 组件、前端 API 封装、Rust 侧 `quick_register_backend` / `custom_tempmail` / `quick_register_simple` 模块及相关命令与设置项
+
+### 🔧 优化改进
+
+- 账号详情弹窗数据展示调整：移除没有真实数据来源的"其他配额"（Slow Request / Advanced Model / Autocomplete 为后端默认值）与不适配 CN 版的美元/请求次数分支，补上用户 ID 与今日签到状态，额度区增加使用进度条
+- 清理 `App.css` 中已无引用的扫码领号弹窗样式（约 760 行：`.quick-register-*` / `.qrcode-*` / `.step-*` / `.stats-badge-*` 等）
+- 适配 Rust 1.81+ 的 `std::panic::PanicHookInfo`，消除 `cargo check` 的 deprecation 警告（现在零警告）
+
+---
+
 ## [1.0.4] - 2025-03-24
 
 ### ✨ 新增功能

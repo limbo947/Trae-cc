@@ -1,55 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, AccountBrief, AppSettings, CheckinResult, UsageSummary, UsageEventsResponse, UserStatisticData } from "./types";
-
-// ============ 快速注册后端 API 配置 ============
-// 从环境变量读取配置，如果没有则使用空字符串（功能将不可用）
-const QUICK_REGISTER_API_BASE = import.meta.env.VITE_QUICK_REGISTER_API_BASE || "";
-const APP_ID = import.meta.env.VITE_APP_ID || "";
-const APP_SECRET = import.meta.env.VITE_APP_SECRET || "";
-
-// 验证配置是否有效
-export function checkApiConfig(): boolean {
-  return !!(QUICK_REGISTER_API_BASE && APP_ID && APP_SECRET);
-}
-
-// 任务创建响应
-export interface CreateTaskResponse {
-  success: boolean;
-  ticket: string;
-  qrcode_url: string;
-  is_vip: boolean;
-  url_scheme: string;
-  message: string;
-}
-
-// 任务状态
-export type TaskStatus = "pending" | "verified" | "expired" | "claimed";
-
-// 查询任务状态响应
-export interface TaskStatusResponse {
-  success: boolean;
-  ticket?: string;
-  status: TaskStatus;
-  platform_id?: string;
-  created_at?: number;
-  verified_at?: number;
-  resource_payload?: {
-    account: string;
-    password: string;
-  }[] | null;
-  access_token?: string | null;
-  platform?: string;
-}
-
-// 领取资源响应 - 根据后端实际返回格式
-export interface ClaimResourceResponse {
-  success: boolean;
-  resource_payload: {
-    account: string;
-    password: string;
-  }[];
-  message: string;
-}
+import type { Account, AccountBrief, AppSettings, CheckinResult, UsageSummary, UsageEventsResponse, UserStatisticData, TraeworkOverview, TraeworkUidEvidence, TraeworkActionResult, TraeworkReconcile } from "./types";
 
 function checkNetwork() {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -75,21 +25,6 @@ export async function addAccountByToken(token: string, cookies?: string): Promis
 // 添加账号（通过邮箱密码登录）
 export async function addAccountByEmail(email: string, password: string): Promise<Account> {
   return invokeNetwork("add_account_by_email", { email, password });
-}
-
-export async function quickRegister(showWindow?: boolean): Promise<Account> {
-  if (typeof showWindow === "boolean") {
-    return invokeNetwork("quick_register", { showWindow });
-  }
-  return invokeNetwork("quick_register");
-}
-
-// 使用自定义临时邮箱进行快速注册
-export async function quickRegisterWithCustomTempMail(showWindow?: boolean): Promise<Account> {
-  if (typeof showWindow === "boolean") {
-    return invokeNetwork("quick_register_with_custom_tempmail", { showWindow });
-  }
-  return invokeNetwork("quick_register_with_custom_tempmail");
 }
 
 export async function startBrowserLogin(): Promise<void> {
@@ -348,103 +283,50 @@ export async function getLogFilePath(): Promise<string> {
   return invoke("get_log_file_path_cmd");
 }
 
-// ============ 快速注册后端 API（通过 Tauri Rust 后端调用，绕过 CORS） ============
+// ============ TraeWork（TRAE SOLO CN）API ============
+//
+// TraeWork 走「登录态快照 / 恢复」，与 TraeCode 的切换机制完全不同，命令彼此独立。
+// 这些命令都会杀/启客户端进程，单次耗时数十秒，前端必须给出进行中反馈并禁用重复触发。
 
-/**
- * 创建快速注册任务
- * @param platformId 用户平台ID（如QQ号）
- * @returns 包含ticket和二维码链接的响应
- */
-export async function createQuickRegisterTask(platformId: string): Promise<CreateTaskResponse> {
-  // 通过 Tauri 命令调用 Rust 后端，绕过 CORS 限制
-  return invoke("quick_register_create_task", { platformId });
+// 概览：当前账号、进程状态、各槽位快照状态
+export async function traeworkOverview(): Promise<TraeworkOverview> {
+  return invoke("traework_overview");
 }
 
-/**
- * 查询任务状态
- * @param ticket 任务票据
- * @returns 任务状态响应
- */
-export async function getTaskStatus(ticket: string): Promise<TaskStatusResponse> {
-  console.log("查询任务状态 ticket:", ticket);
-  // 通过 Tauri 命令调用 Rust 后端，绕过 CORS 限制
-  return invoke("quick_register_get_status", { ticket });
+// 识别当前 TraeWork 登录账号（证据链推导，可能置信度不足）
+export async function traeworkDiscover(): Promise<TraeworkUidEvidence> {
+  return invoke("traework_discover");
 }
 
-/**
- * 领取资源（获取账号）
- * @param ticket 任务票据
- * @returns 包含账号信息的响应
- */
-export async function claimResource(ticket: string): Promise<ClaimResourceResponse> {
-  // 通过 Tauri 命令调用 Rust 后端，绕过 CORS 限制
-  return invoke("quick_register_claim_resource", { ticket });
+// 保存当前登录态（关客户端 → 快照 → 登记账号 → 重启客户端）
+export async function traeworkSaveCurrentLogin(
+  uid?: string,
+  name?: string,
+): Promise<TraeworkActionResult> {
+  return invoke("traework_save_current_login", { uid, name });
 }
 
-// 统计响应
-export interface StatsResponse {
-  success: boolean;
-  data: {
-    available_count: number;
-    resource_type: string;
-  };
-  message: string;
+// 切换到指定 TraeWork 账号
+export async function traeworkSwitchAccount(accountId: string): Promise<TraeworkActionResult> {
+  return invoke("traework_switch_account", { accountId });
 }
 
-/**
- * 获取剩余账号数量统计
- * @returns 统计响应
- */
-export async function getQuickRegisterStats(): Promise<StatsResponse> {
-  // 通过 Tauri 命令调用 Rust 后端，绕过 CORS 限制
-  return invoke("quick_register_get_stats");
+// 删除某账号的快照，返回释放的字节数
+export async function traeworkDeleteSnapshot(accountId: string): Promise<number> {
+  return invoke("traework_delete_snapshot", { accountId });
 }
 
-/**
- * 轮询等待任务验证完成
- * @param ticket 任务票据
- * @param timeoutMs 超时时间（毫秒）
- * @param intervalMs 轮询间隔（毫秒）
- * @returns 验证成功后的任务状态
- */
-export async function pollTaskVerification(
-  ticket: string,
-  timeoutMs: number = 600000, // 默认10分钟
-  intervalMs: number = 3000   // 默认3秒轮询一次
-): Promise<TaskStatusResponse> {
-  const startTime = Date.now();
+// 设置 TraeWork 可执行文件路径
+export async function traeworkSetPath(path: string): Promise<string> {
+  return invoke("traework_set_path", { path });
+}
 
-  return new Promise((resolve, reject) => {
-    const poll = async () => {
-      try {
-        // 检查是否超时
-        if (Date.now() - startTime > timeoutMs) {
-          reject(new Error("等待验证超时，请重新尝试"));
-          return;
-        }
+// 自动扫描 TraeWork 可执行文件路径
+export async function traeworkScanPath(): Promise<string | null> {
+  return invoke("traework_scan_path");
+}
 
-        const status = await getTaskStatus(ticket);
-        console.log("轮询状态:", status);
-
-        // 后端可能返回的状态: pending, verified, claimed, expired
-        if (status.status === "verified" || status.status === "claimed") {
-          resolve(status);
-          return;
-        }
-
-        if (status.status === "expired") {
-          reject(new Error("二维码已过期，请重新获取"));
-          return;
-        }
-
-        // 继续轮询 (pending 状态)
-        setTimeout(poll, intervalMs);
-      } catch (error: any) {
-        console.error("轮询出错:", error);
-        reject(error);
-      }
-    };
-
-    poll();
-  });
+// 修复槽位：把内容与目录名不符的快照按其中记录的真实账号 id 改名归位，并登记缺失账号
+export async function traeworkReconcile(): Promise<TraeworkReconcile> {
+  return invoke("traework_reconcile");
 }

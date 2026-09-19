@@ -25,16 +25,9 @@ export function Settings({
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const defaultSettings = useMemo<AppSettings>(
     () => ({
-      quick_register_show_window: false,
       auto_refresh_enabled: true,
       privacy_auto_enable: true,
       auto_start_enabled: false,
-      api_key: "",
-      custom_tempmail_config: {
-        api_url: "",
-        secret_key: "",
-        email_domain: "",
-      },
     }),
     []
   );
@@ -406,31 +399,6 @@ export function Settings({
 
       <div className="settings-section">
         <h3>通用设置</h3>
-        <div className="setting-item">
-          <div className="setting-info">
-            <div className="setting-label">快速注册显示浏览器窗口</div>
-            <div className="setting-desc">关闭后在后台完成注册并通过通知提示进度</div>
-          </div>
-          <div className="setting-action">
-            <button
-              type="button"
-              className={`pill-toggle ${currentSettings.quick_register_show_window ? "on" : ""}`}
-              onClick={() =>
-                updateSettings(
-                  { quick_register_show_window: !currentSettings.quick_register_show_window },
-                  "已更新快速注册显示设置"
-                )
-              }
-              disabled={settingsDisabled}
-              role="switch"
-              aria-checked={currentSettings.quick_register_show_window}
-            >
-              <span className="pill-track"></span>
-              <span className="pill-thumb"></span>
-            </button>
-          </div>
-        </div>
-
         <div className="setting-item">
           <div className="setting-info">
             <div className="setting-label">自动刷新</div>

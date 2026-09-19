@@ -7,13 +7,10 @@ mod autostart;
 mod machine;
 mod privacy;
 mod device_reset;
-// mod tempmail_client; // 已禁用，依赖外部 exe 文件
-// mod quick_register_simple; // 已禁用快速注册功能
 mod browser_auto_login;
 mod logger;
 mod tc_crypto;
-mod custom_tempmail;
-mod quick_register_backend;
+mod traework;
 
 use std::collections::HashMap;
 use std::fs;
@@ -32,7 +29,6 @@ use warp::Filter;
 
 use account::{AccountBrief, AccountManager, Account};
 use api::{TraeApiClient, UsageSummary, UsageQueryResponse, UserStatisticResult};
-// use quick_register_simple::wait_for_request_cookies; // 已禁用快速注册功能
 
 #[cfg(target_os = "windows")]
 fn hide_console_window() {
@@ -49,25 +45,19 @@ fn hide_console_window() {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
-    pub quick_register_show_window: bool,
     pub auto_refresh_enabled: bool,
     pub privacy_auto_enable: bool,
     pub auto_update_check: bool,
     pub auto_start_enabled: bool,
-    pub api_key: String,
-    pub custom_tempmail_config: custom_tempmail::CustomTempMailConfig,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            quick_register_show_window: false,
             auto_refresh_enabled: true,
             privacy_auto_enable: true,
             auto_update_check: true,
             auto_start_enabled: false,
-            api_key: "9201".to_string(),
-            custom_tempmail_config: custom_tempmail::CustomTempMailConfig::default(),
         }
     }
 }
@@ -270,25 +260,6 @@ async fn download_and_run_installer(url: String) -> Result<String> {
 }
 
 
-
-#[tauri::command]
-async fn quick_register(_app: AppHandle, _show_window: bool, _state: State<'_, AppState>) -> Result<Account> {
-    // 快速注册功能已禁用，请使用 quick_register_with_custom_tempmail
-    Err(ApiError::from(anyhow::anyhow!("快速注册功能已禁用，请在设置中配置自定义临时邮箱后使用新功能")))
-}
-
-/// 使用自定义临时邮箱进行快速注册
-#[tauri::command]
-async fn quick_register_with_custom_tempmail(
-    _app: AppHandle,
-    _show_window: bool,
-    _state: State<'_, AppState>,
-) -> Result<Account> {
-    // 此功能需要完整的前端配合，暂时返回提示
-    Err(ApiError::from(anyhow::anyhow!(
-        "自定义临时邮箱快速注册功能开发中，请使用浏览器注册功能手动注册"
-    )))
-}
 
 fn build_browser_login_script(port: u16) -> String {
     let script = r#"(function() {
@@ -1681,8 +1652,6 @@ pub fn run() {
             get_settings,
             update_settings,
             download_and_run_installer,
-            quick_register,
-            quick_register_with_custom_tempmail,
             start_browser_login,
             finish_browser_login,
             cancel_browser_login,
@@ -1725,10 +1694,14 @@ pub fn run() {
             export_logs_cmd,
             clear_logs_cmd,
             get_log_file_path_cmd,
-            quick_register_backend::quick_register_create_task,
-            quick_register_backend::quick_register_get_status,
-            quick_register_backend::quick_register_claim_resource,
-            quick_register_backend::quick_register_get_stats,
+            traework::commands::traework_overview,
+            traework::commands::traework_discover,
+            traework::commands::traework_save_current_login,
+            traework::commands::traework_switch_account,
+            traework::commands::traework_delete_snapshot,
+            traework::commands::traework_set_path,
+            traework::commands::traework_scan_path,
+            traework::commands::traework_reconcile,
         ])
         .setup(|app| {
             // 获取主窗口并显示

@@ -1,41 +1,27 @@
 import { useRef, useState, useEffect } from "react";
 import * as api from "../api";
 import type { Account } from "../types";
-import { QuickRegisterModal } from "./QuickRegisterModal";
 
 interface AddAccountModalProps {
   isOpen: boolean;
   onClose: () => void;
   onToast?: (type: "success" | "error" | "warning" | "info", message: string) => void;
   onAccountAdded?: (account: Account) => void;
-  quickRegisterShowWindow?: boolean;
   onImportAccounts?: () => void;
   onExportAccounts?: () => void;
   canExport?: boolean;
 }
 
-type AddMode = "browser" | "register" | "quick-register-v2" | "more";
-type MoreSubMode = "trae-ide" | "import-export" | null;
-
-// 注册进度步骤
-const REGISTER_STEPS = [
-  { percent: 5, message: "正在初始化..." },
-  { percent: 15, message: "生成临时邮箱..." },
-  { percent: 25, message: "打开注册页面..." },
-  { percent: 40, message: "填写注册信息..." },
-  { percent: 55, message: "等待验证码..." },
-  { percent: 70, message: "验证邮箱..." },
-  { percent: 85, message: "获取账号 Token..." },
-  { percent: 95, message: "保存账号信息..." },
-  { percent: 100, message: "注册完成!" },
-];
+// 主模式只保留两条真实可用的路径：浏览器登录抓取凭据、更多菜单里的本地读取与导入导出。
+// 曾经的「快速注册」「扫码领号」依赖已删除的代理后端，入口一并移除，避免留下点了就报错的按钮。
+type AddMode = "browser" | "more";
+type MoreSubMode = "trae-ide" | null;
 
 export function AddAccountModal({
   isOpen,
   onClose,
   onToast,
   onAccountAdded,
-  quickRegisterShowWindow = true,
   onImportAccounts,
   onExportAccounts,
   canExport = false,
@@ -46,27 +32,10 @@ export function AddAccountModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
-  
+
   // 浏览器登录表单状态
   const [loginProgress, setLoginProgress] = useState(0);
   const [loginStatus, setLoginStatus] = useState("");
-  
-  // 快速注册进度状态
-  const [registerProgress, setRegisterProgress] = useState(0);
-  const [registerStatus, setRegisterStatus] = useState("");
-  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  
-  // 新版快速注册弹窗状态
-  const [showQuickRegisterV2, setShowQuickRegisterV2] = useState(false);
-
-  // 清理进度定时器
-  useEffect(() => {
-    return () => {
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
-      }
-    };
-  }, []);
 
   // 点击外部关闭下拉菜单
   useEffect(() => {
@@ -80,36 +49,6 @@ export function AddAccountModal({
   }, []);
 
   if (!isOpen) return null;
-
-  // 模拟进度更新
-  const startProgressSimulation = () => {
-    let currentStep = 0;
-    setRegisterProgress(0);
-    setRegisterStatus(REGISTER_STEPS[0].message);
-    
-    progressIntervalRef.current = setInterval(() => {
-      currentStep++;
-      if (currentStep < REGISTER_STEPS.length) {
-        const step = REGISTER_STEPS[currentStep];
-        setRegisterProgress(step.percent);
-        setRegisterStatus(step.message);
-      } else {
-        if (progressIntervalRef.current) {
-          clearInterval(progressIntervalRef.current);
-        }
-      }
-    }, 3000); // 每3秒更新一次进度
-  };
-
-  // 停止进度模拟
-  const stopProgressSimulation = () => {
-    if (progressIntervalRef.current) {
-      clearInterval(progressIntervalRef.current);
-      progressIntervalRef.current = null;
-    }
-    setRegisterProgress(0);
-    setRegisterStatus("");
-  };
 
   const handleReadTraeAccount = async () => {
     setLoading(true);
@@ -143,18 +82,16 @@ export function AddAccountModal({
       await api.startBrowserLogin();
       setLoginProgress(30);
       setLoginStatus("请在浏览器中完成登录...");
-      
+
       // 第二步：等待登录完成并获取账号
       const account = await api.finishBrowserLogin();
-      
+
       setLoginProgress(100);
       setLoginStatus("登录成功!");
-      
-      console.log("[BrowserAutoLogin] 登录成功，账号:", account);
-      
+
       // 通知父组件添加账号
       onAccountAdded?.(account);
-      
+
       // 延迟关闭弹窗
       setTimeout(() => {
         setLoading(false);
@@ -171,38 +108,6 @@ export function AddAccountModal({
     }
   };
 
-  const handleQuickRegister = async () => {
-    setLoading(true);
-    setError("");
-    startProgressSimulation();
-
-    try {
-      const account = await api.quickRegister(quickRegisterShowWindow);
-      // 完成进度
-      setRegisterProgress(100);
-      setRegisterStatus("注册完成!");
-      
-      console.log("[QuickRegister] 注册成功，账号:", account);
-      
-      // 先通知父组件添加账号
-      onAccountAdded?.(account);
-      
-      // 延迟关闭弹窗，让用户看到完成状态
-      setTimeout(() => {
-        // 先显示成功提示
-        onToast?.("success", `注册成功，已导入账号: ${account.email}`);
-        // 重置状态并关闭
-        setLoading(false);
-        stopProgressSimulation();
-        onClose();
-      }, 800);
-    } catch (err: any) {
-      setError(err.message || "快速注册失败");
-      setLoading(false);
-      stopProgressSimulation();
-    }
-  };
-
   const handleClose = () => {
     setError("");
     setMode("browser");
@@ -210,7 +115,6 @@ export function AddAccountModal({
     setShowMoreDropdown(false);
     setLoginProgress(0);
     setLoginStatus("");
-    stopProgressSimulation();
     void api.cancelBrowserLogin();
     onClose();
   };
@@ -253,7 +157,7 @@ export function AddAccountModal({
                 <polyline points="6 9 12 15 18 9" />
               </svg>
             </button>
-            
+
             {showMoreDropdown && (
               <div className="more-dropdown-menu dropdown-right">
                 <button
@@ -314,37 +218,6 @@ export function AddAccountModal({
             </svg>
             浏览器登录
           </button>
-          
-          {/* 快速注册按钮 */}
-          <button
-            className={`mode-tab ${mode === "register" ? "active" : ""}`}
-            onClick={() => { setMode("register"); setError(""); }}
-            disabled={loading}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
-            </svg>
-            快速注册
-          </button>
-          
-          {/* 扫码快速注册按钮 */}
-          <button
-            className={`mode-tab ${mode === "quick-register-v2" ? "active" : ""}`}
-            onClick={() => { 
-              setShowQuickRegisterV2(true);
-              setError(""); 
-            }}
-            disabled={loading}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="3" width="7" height="7" rx="1" />
-              <rect x="14" y="3" width="7" height="7" rx="1" />
-              <rect x="3" y="14" width="7" height="7" rx="1" />
-              <rect x="14" y="14" width="7" height="7" rx="1" />
-            </svg>
-            扫码领号
-          </button>
         </div>
 
         {mode === "browser" ? (
@@ -366,8 +239,8 @@ export function AddAccountModal({
                   {loginProgress >= 100 ? '✓ ' : ''}{loginStatus}
                 </div>
                 <div className="register-progress-bar">
-                  <div 
-                    className="register-progress-fill" 
+                  <div
+                    className="register-progress-fill"
                     style={{ width: `${loginProgress}%` }}
                   />
                 </div>
@@ -381,51 +254,13 @@ export function AddAccountModal({
               <button type="button" onClick={handleClose} disabled={loading}>
                 取消
               </button>
-              <button 
-                type="button" 
-                className="primary" 
-                onClick={handleBrowserAutoLogin} 
+              <button
+                type="button"
+                className="primary"
+                onClick={handleBrowserAutoLogin}
                 disabled={loading}
               >
                 {loading ? "等待登录..." : "打开登录页面"}
-              </button>
-            </div>
-          </div>
-        ) : mode === "register" ? (
-          <div className="trae-ide-mode">
-            <div className="mode-description">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M12 5v14" />
-                <path d="M5 12h14" />
-              </svg>
-              <h3>快速注册并自动导入</h3>
-              <p>系统自动生成邮箱完成注册，并导入到列表</p>
-            </div>
-
-            {/* 进度条区域 */}
-            {loading && (
-              <div className={`register-progress-container ${registerProgress >= 100 ? 'complete' : ''}`}>
-                <div className="register-progress-status">
-                  {registerProgress >= 100 ? '✓ ' : ''}{registerStatus}
-                </div>
-                <div className="register-progress-bar">
-                  <div 
-                    className="register-progress-fill" 
-                    style={{ width: `${registerProgress}%` }}
-                  />
-                </div>
-                <div className="register-progress-percent">{registerProgress}%</div>
-              </div>
-            )}
-
-            {error && <div className="error-message">{error}</div>}
-
-            <div className="modal-actions">
-              <button type="button" onClick={handleClose} disabled={loading}>
-                取消
-              </button>
-              <button type="button" className="primary" onClick={handleQuickRegister} disabled={loading}>
-                {loading ? "注册中..." : "快速注册并导入"}
               </button>
             </div>
           </div>
@@ -459,24 +294,6 @@ export function AddAccountModal({
           </div>
         ) : null}
       </div>
-      
-      {/* 新版快速注册弹窗 */}
-      <QuickRegisterModal
-        isOpen={showQuickRegisterV2}
-        onClose={() => {
-          setShowQuickRegisterV2(false);
-          setMode("browser");
-        }}
-        onToast={onToast}
-        onAccountsAdded={(accounts) => {
-          // 逐个通知父组件添加账号
-          accounts.forEach((account) => {
-            onAccountAdded?.(account);
-          });
-          // 关闭当前弹窗
-          handleClose();
-        }}
-      />
     </div>
   );
 }

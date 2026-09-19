@@ -17,6 +17,15 @@ const ICONS: Record<string, ReactNode> = {
       <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   ),
+  // TraeWork：层叠的窗口/会话面板
+  traework: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M9 9v12" />
+    </svg>
+  ),
   // 统计数据：柱状图
   stats: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
@@ -47,6 +56,7 @@ const ICONS: Record<string, ReactNode> = {
 
 const menuItems = [
   { id: "accounts", label: "账号管理" },
+  { id: "traework", label: "TraeWork" },
   { id: "stats", label: "统计数据" },
   { id: "settings", label: "设置" },
   { id: "about", label: "关于" },

@@ -177,7 +177,11 @@ pub fn clear_logs() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Log panic information
-pub fn log_panic(info: &std::panic::PanicInfo) {
+///
+/// 参数类型跟随 `std::panic::set_hook` 的现行签名 `&PanicHookInfo`：
+/// 旧的 `PanicInfo` 别名自 Rust 1.81 起被标记 deprecated（它现在指向
+/// `PanicHookInfo`），换新名只是消除告警，行为完全一致。
+pub fn log_panic(info: &std::panic::PanicHookInfo) {
     log::error!("PANIC: {}", info);
     
     // Also write to a separate crash log

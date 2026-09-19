@@ -12,26 +12,64 @@ interface DetailModalProps {
     avatar_url: string;
     plan_type: string;
     password?: string | null;
+    /** 账号在后端的唯一标识（列表 brief 不带，打开详情时由上层补全） */
+    user_id?: string;
+    /** 今日签到状态（后端按本地日期口径判定） */
+    checked_in_today?: boolean;
   } | null;
   usage: UsageSummary | null;
   onUpdateCredentials: (accountId: string, updates: { email?: string; password?: string }) => Promise<void>;
   onToast?: (type: "success" | "error" | "warning" | "info", message: string, duration?: number) => void;
 }
 
+/**
+ * 额度进度条
+ *
+ * 只在 total > 0 时渲染：CN 积分的 total 来自服务端 usage_summary，为 0 说明这次没拿到
+ * 真实额度（而不是「额度用完了」），画一条 0/0 的进度条会误导用户。
+ */
+function CreditsBar({ used, total }: { used: number; total: number }) {
+  if (total <= 0) return null;
+  const percent = Math.min(100, Math.max(0, (used / total) * 100));
+  return (
+    <div
+      style={{
+        height: "6px",
+        margin: "4px 0 12px",
+        borderRadius: "3px",
+        background: "var(--bg-hover)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          width: `${percent}%`,
+          height: "100%",
+          borderRadius: "3px",
+          background: "var(--success)",
+          transition: "width 0.3s",
+        }}
+      />
+    </div>
+  );
+}
+
 export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentials, onToast }: DetailModalProps) {
-  if (!isOpen || !account) return null;
   const [showPassword, setShowPassword] = useState(false);
   const [editingField, setEditingField] = useState<"email" | "password" | null>(null);
-  const [emailDraft, setEmailDraft] = useState(account.email || "");
-  const [passwordDraft, setPasswordDraft] = useState(account.password || "");
+  const [emailDraft, setEmailDraft] = useState(account?.email || "");
+  const [passwordDraft, setPasswordDraft] = useState(account?.password || "");
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    setEmailDraft(account.email || "");
-    setPasswordDraft(account.password || "");
+    setEmailDraft(account?.email || "");
+    setPasswordDraft(account?.password || "");
     setEditingField(null);
     setShowPassword(false);
-  }, [account.id, account.email, account.password]);
+  }, [account?.id, account?.email, account?.password]);
+
+  // 早退必须放在所有 hooks 之后：否则 isOpen 由 false 翻转为 true 时 hook 数量变化，React 会直接报错
+  if (!isOpen || !account) return null;
 
   const formatDate = (timestamp: number) => {
     if (!timestamp) return "-";
@@ -133,6 +171,46 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
     });
   };
 
+  const copyButtonStyle: React.CSSProperties = {
+    width: "24px",
+    height: "24px",
+    padding: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: "4px",
+    border: "none",
+    background: "transparent",
+    color: "var(--text-muted)",
+    cursor: "pointer",
+    transition: "all 0.2s",
+  };
+
+  const editButtonStyle: React.CSSProperties = {
+    width: "28px",
+    height: "28px",
+    padding: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: "6px",
+    border: "none",
+    cursor: "pointer",
+    transition: "all 0.2s",
+  };
+
+  const editInputStyle: React.CSSProperties = {
+    width: "240px",
+    padding: "6px 10px",
+    borderRadius: "6px",
+    border: "1px solid var(--border)",
+    background: "var(--bg-input)",
+    color: "var(--text-primary)",
+    fontSize: "13px",
+    outline: "none",
+    transition: "border-color 0.2s",
+  };
+
   return (
     <div className="modal-overlay" onClick={handleClose}>
       <div className="modal-content detail-modal" onClick={(e) => e.stopPropagation()}>
@@ -141,9 +219,9 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
         <div className="detail-section">
           <h3 style={{ display: 'flex', alignItems: 'center' }}>
             基本信息
-            <span style={{ 
-              fontSize: '12px', 
-              color: 'var(--text-muted)', 
+            <span style={{
+              fontSize: '12px',
+              color: 'var(--text-muted)',
               fontWeight: 'normal',
               marginLeft: '8px',
               background: 'var(--bg-hover)',
@@ -161,20 +239,7 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
                 type="button"
                 onClick={() => handleCopy(account.name, "用户名")}
                 title="复制用户名"
-                style={{
-                  width: '24px',
-                  height: '24px',
-                  padding: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: '4px',
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--text-muted)',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s'
-                }}
+                style={copyButtonStyle}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = 'var(--bg-hover)';
                   e.currentTarget.style.color = 'var(--text-primary)';
@@ -188,6 +253,30 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
               </button>
             </span>
           </div>
+          {account.user_id && (
+            <div className="detail-row">
+              <span className="detail-label">用户 ID</span>
+              <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end' }}>
+                {account.user_id}
+                <button
+                  type="button"
+                  onClick={() => handleCopy(account.user_id || "", "用户 ID")}
+                  title="复制用户 ID"
+                  style={copyButtonStyle}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--bg-hover)';
+                    e.currentTarget.style.color = 'var(--text-primary)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent';
+                    e.currentTarget.style.color = 'var(--text-muted)';
+                  }}
+                >
+                  <CopyIcon />
+                </button>
+              </span>
+            </div>
+          )}
           <div className="detail-row" style={{ alignItems: 'center' }}>
             <span className="detail-label">邮箱</span>
             <span
@@ -204,17 +293,7 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
                     onChange={(event) => setEmailDraft(event.target.value)}
                     onKeyDown={(event) => handleKeyDown(event, "email")}
                     autoFocus
-                    style={{ 
-                      width: '240px',
-                      padding: '6px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--border)',
-                      background: 'var(--bg-input)',
-                      color: 'var(--text-primary)',
-                      fontSize: '13px',
-                      outline: 'none',
-                      transition: 'border-color 0.2s',
-                    }}
+                    style={editInputStyle}
                   />
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <button
@@ -222,27 +301,14 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
                       onClick={() => handleSave("email")}
                       disabled={isSaving}
                       title="保存"
-                      style={{ 
-                        width: '28px', 
-                        height: '28px', 
-                        padding: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '6px',
-                        border: 'none',
-                        background: 'var(--success-bg)',
-                        color: 'var(--success)',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s'
-                      }}
+                      style={{ ...editButtonStyle, background: 'var(--success-bg)', color: 'var(--success)' }}
                       onMouseEnter={(e) => {
-                         e.currentTarget.style.background = 'var(--success)';
-                         e.currentTarget.style.color = 'white';
+                        e.currentTarget.style.background = 'var(--success)';
+                        e.currentTarget.style.color = 'white';
                       }}
                       onMouseLeave={(e) => {
-                         e.currentTarget.style.background = 'var(--success-bg)';
-                         e.currentTarget.style.color = 'var(--success)';
+                        e.currentTarget.style.background = 'var(--success-bg)';
+                        e.currentTarget.style.color = 'var(--success)';
                       }}
                     >
                       <CheckIcon />
@@ -252,27 +318,14 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
                       onClick={cancelEdit}
                       disabled={isSaving}
                       title="取消"
-                      style={{ 
-                        width: '28px', 
-                        height: '28px', 
-                        padding: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '6px',
-                        border: 'none',
-                        background: 'var(--bg-hover)',
-                        color: 'var(--text-secondary)',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s'
-                      }}
+                      style={{ ...editButtonStyle, background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}
                       onMouseEnter={(e) => {
-                         e.currentTarget.style.background = 'var(--bg-active)';
-                         e.currentTarget.style.color = 'var(--text-primary)';
+                        e.currentTarget.style.background = 'var(--bg-active)';
+                        e.currentTarget.style.color = 'var(--text-primary)';
                       }}
                       onMouseLeave={(e) => {
-                         e.currentTarget.style.background = 'var(--bg-hover)';
-                         e.currentTarget.style.color = 'var(--text-secondary)';
+                        e.currentTarget.style.background = 'var(--bg-hover)';
+                        e.currentTarget.style.color = 'var(--text-secondary)';
                       }}
                     >
                       <XIcon />
@@ -287,20 +340,7 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
                       type="button"
                       onClick={() => handleCopy(account.email, "邮箱")}
                       title="复制邮箱"
-                      style={{
-                        width: '24px',
-                        height: '24px',
-                        padding: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '4px',
-                        border: 'none',
-                        background: 'transparent',
-                        color: 'var(--text-muted)',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s'
-                      }}
+                      style={copyButtonStyle}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.background = 'var(--bg-hover)';
                         e.currentTarget.style.color = 'var(--text-primary)';
@@ -329,27 +369,17 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
                       onChange={(event) => setPasswordDraft(event.target.value)}
                       onKeyDown={(event) => handleKeyDown(event, "password")}
                       autoFocus
-                      style={{ 
-                        width: '100%',
-                        padding: '6px 30px 6px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--border)',
-                        background: 'var(--bg-input)',
-                        color: 'var(--text-primary)',
-                        fontSize: '13px',
-                        outline: 'none',
-                        transition: 'border-color 0.2s',
-                      }}
+                      style={{ ...editInputStyle, width: '100%', padding: '6px 30px 6px 10px' }}
                     />
                     <button
                       type="button"
                       className="password-toggle"
                       onClick={() => setShowPassword((prev) => !prev)}
                       aria-label={showPassword ? "隐藏密码" : "显示密码"}
-                      style={{ 
-                        position: 'absolute', 
-                        right: '8px', 
-                        display: 'flex', 
+                      style={{
+                        position: 'absolute',
+                        right: '8px',
+                        display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         padding: 0,
@@ -365,27 +395,14 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
                       onClick={() => handleSave("password")}
                       disabled={isSaving}
                       title="保存"
-                      style={{ 
-                        width: '28px', 
-                        height: '28px', 
-                        padding: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '6px',
-                        border: 'none',
-                        background: 'var(--success-bg)',
-                        color: 'var(--success)',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s'
-                      }}
+                      style={{ ...editButtonStyle, background: 'var(--success-bg)', color: 'var(--success)' }}
                       onMouseEnter={(e) => {
-                         e.currentTarget.style.background = 'var(--success)';
-                         e.currentTarget.style.color = 'white';
+                        e.currentTarget.style.background = 'var(--success)';
+                        e.currentTarget.style.color = 'white';
                       }}
                       onMouseLeave={(e) => {
-                         e.currentTarget.style.background = 'var(--success-bg)';
-                         e.currentTarget.style.color = 'var(--success)';
+                        e.currentTarget.style.background = 'var(--success-bg)';
+                        e.currentTarget.style.color = 'var(--success)';
                       }}
                     >
                       <CheckIcon />
@@ -395,27 +412,14 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
                       onClick={cancelEdit}
                       disabled={isSaving}
                       title="取消"
-                      style={{ 
-                        width: '28px', 
-                        height: '28px', 
-                        padding: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '6px',
-                        border: 'none',
-                        background: 'var(--bg-hover)',
-                        color: 'var(--text-secondary)',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s'
-                      }}
+                      style={{ ...editButtonStyle, background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}
                       onMouseEnter={(e) => {
-                         e.currentTarget.style.background = 'var(--bg-active)';
-                         e.currentTarget.style.color = 'var(--text-primary)';
+                        e.currentTarget.style.background = 'var(--bg-active)';
+                        e.currentTarget.style.color = 'var(--text-primary)';
                       }}
                       onMouseLeave={(e) => {
-                         e.currentTarget.style.background = 'var(--bg-hover)';
-                         e.currentTarget.style.color = 'var(--text-secondary)';
+                        e.currentTarget.style.background = 'var(--bg-hover)';
+                        e.currentTarget.style.color = 'var(--text-secondary)';
                       }}
                     >
                       <XIcon />
@@ -447,20 +451,7 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
                         type="button"
                         onClick={() => handleCopy(account.password || "", "密码")}
                         title="复制密码"
-                        style={{
-                          width: '24px',
-                          height: '24px',
-                          padding: 0,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          borderRadius: '4px',
-                          border: 'none',
-                          background: 'transparent',
-                          color: 'var(--text-muted)',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s'
-                        }}
+                        style={copyButtonStyle}
                         onMouseEnter={(e) => {
                           e.currentTarget.style.background = 'var(--bg-hover)';
                           e.currentTarget.style.color = 'var(--text-primary)';
@@ -483,184 +474,85 @@ export function DetailModal({ isOpen, onClose, account, usage, onUpdateCredentia
             <span className="detail-value">{usage?.plan_type || account.plan_type || "Free"}</span>
           </div>
           <div className="detail-row">
-            <span className="detail-label">重置时间</span>
-            <span className="detail-value">{usage ? formatDate(usage.reset_time) : "-"}</span>
+            <span className="detail-label">今日签到</span>
+            <span className={`detail-value ${account.checked_in_today ? "success" : ""}`}>
+              {account.checked_in_today ? "已签到" : "未签到"}
+            </span>
           </div>
         </div>
 
-        {usage && (
+        {/* 额度只展示 CN 积分模型（v2 端点）的数据：旧美元/请求次数分支在 CN 账号下拿不到真实值，
+            曾经显示的 Slow Request 50 / Advanced Model 1000 等其实是后端 Default 的硬编码兜底。 */}
+        {usage && usage.is_credits_billing ? (
           <>
-            {usage.is_credits_billing ? (
-              // CN 积分钟模型 - 按适用产品分开显示：通用积分与 Work 专属积分
-              <>
-                <div className="detail-section">
-                  <h3>💰 额度（积分合计）</h3>
-                  <div className="detail-row">
-                    <span className="detail-label">已使用</span>
-                    <span className="detail-value">{formatNumber(usage.credits_used)}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">总配额</span>
-                    <span className="detail-value">{formatNumber(usage.credits_total)}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">剩余</span>
-                    <span className="detail-value success">{formatNumber(usage.credits_left)}</span>
-                  </div>
-                </div>
-
-                {(usage.credits_general_total ?? 0) > 0 && (
-                  <div className="detail-section">
-                    <h3>🌐 通用积分（TraeCode / TraeWork 通用）</h3>
-                    <div className="detail-row">
-                      <span className="detail-label">已使用</span>
-                      <span className="detail-value">{formatNumber(usage.credits_general_used ?? 0)}</span>
-                    </div>
-                    <div className="detail-row">
-                      <span className="detail-label">总配额</span>
-                      <span className="detail-value">{formatNumber(usage.credits_general_total ?? 0)}</span>
-                    </div>
-                    <div className="detail-row">
-                      <span className="detail-label">剩余</span>
-                      <span className="detail-value success">{formatNumber(usage.credits_general_left ?? 0)}</span>
-                    </div>
-                  </div>
-                )}
-
-                {(usage.credits_work_total ?? 0) > 0 && (
-                  <div className="detail-section">
-                    <h3>💼 Work 专属积分（仅 TraeWork）</h3>
-                    <div className="detail-row">
-                      <span className="detail-label">已使用</span>
-                      <span className="detail-value">{formatNumber(usage.credits_work_used ?? 0)}</span>
-                    </div>
-                    <div className="detail-row">
-                      <span className="detail-label">总配额</span>
-                      <span className="detail-value">{formatNumber(usage.credits_work_total ?? 0)}</span>
-                    </div>
-                    <div className="detail-row">
-                      <span className="detail-label">剩余</span>
-                      <span className="detail-value success">{formatNumber(usage.credits_work_left ?? 0)}</span>
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : usage.is_dollar_billing ? (
-              // 美元计费模式 - 显示 Basic 和 Bonus 额度详情
-              <>
-                <div className="detail-section">
-                  <h3>💰 额度 ($)</h3>
-                  <div className="detail-row">
-                    <span className="detail-label">已使用</span>
-                    <span className="detail-value">${usage.fast_dollar_used.toFixed(2)}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">总配额</span>
-                    <span className="detail-value">${usage.fast_dollar_limit.toFixed(2)}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">剩余</span>
-                    <span className="detail-value success">${usage.fast_dollar_left.toFixed(2)}</span>
-                  </div>
-                </div>
-
-                <div className="detail-section">
-                  <h3>💎 真实额度 (Basic)</h3>
-                  <div className="detail-row">
-                    <span className="detail-label">已使用</span>
-                    <span className="detail-value">${usage.basic_dollar_used.toFixed(2)}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">总配额</span>
-                    <span className="detail-value">${usage.basic_dollar_limit.toFixed(2)}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">剩余</span>
-                    <span className="detail-value success">${usage.basic_dollar_left.toFixed(2)}</span>
-                  </div>
-                </div>
-
-                {usage.bonus_dollar_limit > 0 && (
-                  <div className="detail-section">
-                    <h3>🎁 赠送额度 (Bonus)</h3>
-                    <div className="detail-row">
-                      <span className="detail-label">已使用</span>
-                      <span className="detail-value">${usage.bonus_dollar_used.toFixed(2)}</span>
-                    </div>
-                    <div className="detail-row">
-                      <span className="detail-label">总配额</span>
-                      <span className="detail-value">${usage.bonus_dollar_limit.toFixed(2)}</span>
-                    </div>
-                    <div className="detail-row">
-                      <span className="detail-label">剩余</span>
-                      <span className="detail-value success">${usage.bonus_dollar_left.toFixed(2)}</span>
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              // 普通模式 - 显示 Fast Request
-              <div className="detail-section">
-                <h3>Fast Request</h3>
-                <div className="detail-row">
-                  <span className="detail-label">已使用</span>
-                  <span className="detail-value">{formatNumber(usage.fast_request_used)}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">总配额</span>
-                  <span className="detail-value">{formatNumber(usage.fast_request_limit)}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">剩余</span>
-                  <span className="detail-value success">{formatNumber(usage.fast_request_left)}</span>
-                </div>
-              </div>
-            )}
-
-            {usage.extra_fast_request_limit > 0 && (
-              <div className="detail-section">
-                <h3>额外礼包 {usage.extra_package_name && `(${usage.extra_package_name})`}</h3>
-                <div className="detail-row">
-                  <span className="detail-label">已使用</span>
-                  <span className="detail-value">{formatNumber(usage.extra_fast_request_used)}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">总配额</span>
-                  <span className="detail-value">{formatNumber(usage.extra_fast_request_limit)}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">剩余</span>
-                  <span className="detail-value success">{formatNumber(usage.extra_fast_request_left)}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">过期时间</span>
-                  <span className="detail-value">{formatDate(usage.extra_expire_time)}</span>
-                </div>
-              </div>
-            )}
-
             <div className="detail-section">
-              <h3>其他配额</h3>
+              <h3>💰 额度（积分合计）</h3>
+              <CreditsBar used={usage.credits_used} total={usage.credits_total} />
               <div className="detail-row">
-                <span className="detail-label">Slow Request</span>
-                <span className="detail-value">
-                  {formatNumber(usage.slow_request_used)} / {formatNumber(usage.slow_request_limit)}
-                </span>
+                <span className="detail-label">已使用</span>
+                <span className="detail-value">{formatNumber(usage.credits_used)}</span>
               </div>
               <div className="detail-row">
-                <span className="detail-label">Advanced Model</span>
-                <span className="detail-value">
-                  {formatNumber(usage.advanced_model_used)} / {formatNumber(usage.advanced_model_limit)}
-                </span>
+                <span className="detail-label">总配额</span>
+                <span className="detail-value">{formatNumber(usage.credits_total)}</span>
               </div>
               <div className="detail-row">
-                <span className="detail-label">Autocomplete</span>
-                <span className="detail-value">
-                  {formatNumber(usage.autocomplete_used)} / {formatNumber(usage.autocomplete_limit)}
-                </span>
+                <span className="detail-label">剩余</span>
+                <span className="detail-value success">{formatNumber(usage.credits_left)}</span>
               </div>
+              {usage.reset_time > 0 && (
+                <div className="detail-row">
+                  <span className="detail-label">重置时间</span>
+                  <span className="detail-value">{formatDate(usage.reset_time)}</span>
+                </div>
+              )}
             </div>
+
+            {usage.credits_general_total > 0 && (
+              <div className="detail-section">
+                <h3>🌐 通用积分（TraeCode / TraeWork 通用）</h3>
+                <CreditsBar used={usage.credits_general_used} total={usage.credits_general_total} />
+                <div className="detail-row">
+                  <span className="detail-label">已使用</span>
+                  <span className="detail-value">{formatNumber(usage.credits_general_used)}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="detail-label">总配额</span>
+                  <span className="detail-value">{formatNumber(usage.credits_general_total)}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="detail-label">剩余</span>
+                  <span className="detail-value success">{formatNumber(usage.credits_general_left)}</span>
+                </div>
+              </div>
+            )}
+
+            {usage.credits_work_total > 0 && (
+              <div className="detail-section">
+                <h3>💼 Work 专属积分（仅 TraeWork）</h3>
+                <CreditsBar used={usage.credits_work_used} total={usage.credits_work_total} />
+                <div className="detail-row">
+                  <span className="detail-label">已使用</span>
+                  <span className="detail-value">{formatNumber(usage.credits_work_used)}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="detail-label">总配额</span>
+                  <span className="detail-value">{formatNumber(usage.credits_work_total)}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="detail-label">剩余</span>
+                  <span className="detail-value success">{formatNumber(usage.credits_work_left)}</span>
+                </div>
+              </div>
+            )}
           </>
+        ) : (
+          <div className="detail-section">
+            <h3>💰 额度</h3>
+            <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '4px 0' }}>
+              {usage ? "本次未取到积分额度数据，请刷新用量后重试" : "尚未查询用量，请刷新用量后查看"}
+            </div>
+          </div>
         )}
 
         <div className="modal-actions">

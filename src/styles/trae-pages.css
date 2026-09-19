@@ -1,8 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════
-   trae-pages.css — 页面级重塑（仪表盘 / 设置 / 关于 / 错误弹窗）
+   trae-pages.css — 页面级重塑（仪表盘 / 设置 / 关于）
    ------------------------------------------------------------------
-   从 trae-components.css 拆出以控制单文件规模。覆盖 App.css 与
-   ErrorModal.css 中对应历史规则，颜色只引用 token 变量。
+   从 trae-components.css 拆出以控制单文件规模。覆盖 App.css 中
+   对应历史规则，颜色只引用 token 变量。
    ═══════════════════════════════════════════════════════════════ */
 
 /* ── 仪表盘 / 统计卡片：渐变玻璃 → 平面统计卡 ───────────────── */
@@ -428,74 +428,4 @@
 .about-update-desc,
 .about-update-info {
   font-size: 12px;
-}
-
-/* ── ErrorModal 组件（ErrorModal.css 硬编码浅色，整组覆盖） ─── */
-.error-modal-content {
-  background: var(--bg-base-secondary);
-  border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-8);
-  box-shadow: var(--shadow-lg);
-  padding: 24px;
-}
-
-.error-modal-close {
-  border-radius: var(--radius-4);
-  color: var(--text-tertiary);
-}
-
-.error-modal-close:hover {
-  background: var(--bg-overlay-l2);
-  color: var(--text-default);
-}
-
-.error-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: var(--radius-8);
-}
-
-.error-icon.limit {
-  background: var(--status-warning-surface-l1);
-  color: var(--status-warning-default);
-}
-
-.error-icon.empty {
-  background: var(--status-alert-surface-l1);
-  color: var(--status-alert-default);
-}
-
-.error-icon.expired {
-  background: var(--status-primary-surface-l1);
-  color: var(--status-primary-default);
-}
-
-.error-icon.error {
-  background: var(--status-error-surface-l1);
-  color: var(--status-error-default);
-}
-
-.error-icon.success {
-  background: var(--status-success-surface-l1);
-  color: var(--status-success-default);
-}
-
-.error-modal-title {
-  font-size: 16px;
-  color: var(--text-default);
-}
-
-.error-modal-message {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.error-modal-description {
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-
-.error-modal-btn {
-  min-width: 0;
-  padding: 0 16px;
 }
