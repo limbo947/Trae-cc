@@ -27,7 +27,7 @@ use tauri_plugin_updater::UpdaterExt;
 use uuid::Uuid;
 use warp::Filter;
 
-use account::{AccountBrief, AccountManager, Account};
+use account::{AccountBrief, AccountManager, Account, TraeIdeReadOutcome};
 use api::{TraeApiClient, UsageSummary, UsageQueryResponse, UserStatisticResult};
 
 #[cfg(target_os = "windows")]
@@ -46,18 +46,33 @@ fn hide_console_window() {
 #[serde(default)]
 pub struct AppSettings {
     pub auto_refresh_enabled: bool,
+    /// 用量自动刷新的间隔（分钟）。前端按此值起定时器；0 视为不刷新。
+    pub refresh_interval: u32,
     pub privacy_auto_enable: bool,
-    pub auto_update_check: bool,
     pub auto_start_enabled: bool,
+    /// 启动时静默自动签到。
+    ///
+    /// 只作用于 GUI 启动路径：`--silent` 无头模式没有界面，签到失败也不会打扰用户，
+    /// 那边保持「总是尝试」的既有行为（见 `handle_silent_start`）。
+    pub auto_checkin_enabled: bool,
+    /// 界面主题：`light` / `dark`。
+    ///
+    /// 用 `Option` 而不是带默认值的 `String`：老版本的主题只存在 `localStorage` 里，
+    /// 若这里给默认值，前端就分不清「用户从未在本字段设置过」与「用户显式选了 dark」，
+    /// 迁移时会把老用户的 light 偏好悄悄覆盖成 dark。
+    pub theme: Option<String>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             auto_refresh_enabled: true,
+            // 30 分钟：够及时又不给接口压力（下拉提供 5/10/30/60）
+            refresh_interval: 30,
             privacy_auto_enable: true,
-            auto_update_check: true,
             auto_start_enabled: false,
+            auto_checkin_enabled: true,
+            theme: None,
         }
     }
 }
@@ -166,14 +181,26 @@ async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings> {
 
 #[tauri::command]
 async fn update_settings(settings: AppSettings, state: State<'_, AppState>) -> Result<AppSettings> {
-    if let Err(err) = autostart::set_auto_start(settings.auto_start_enabled) {
-        return Err(ApiError::from(err));
-    }
+    // 只在开关真正翻转时才写注册表：否则任何一次无关设置的保存都会被注册表问题挡住。
+    let auto_start_changed = {
+        let current = state.settings.lock().await;
+        current.auto_start_enabled != settings.auto_start_enabled
+    };
+
     {
         let mut current = state.settings.lock().await;
         *current = settings.clone();
     }
     save_settings_to_disk(&settings).map_err(ApiError::from)?;
+
+    if auto_start_changed {
+        if let Err(err) = autostart::set_auto_start(settings.auto_start_enabled) {
+            // 注册表写入可能被策略或安全软件拦截，属环境问题，不该让「隐私模式」等
+            // 无关设置一起保存失败；启动时会用落盘值重写一次注册表，下次启动即自愈。
+            log::warn!("写入开机自启动注册表失败（设置已保存）: {}", err);
+        }
+    }
+
     Ok(settings)
 }
 
@@ -1081,7 +1108,11 @@ async fn switch_account(account_id: String, force: Option<bool>, state: State<'_
                 // 即使查找数据库失败，也尝试启动 Trae
                 tokio::spawn(async move {
                     let _ = tokio::task::spawn_blocking(|| {
-                        let _ = machine::open_trae();
+                        if let Err(e) = machine::open_trae() {
+                            // open_trae 只认已保存的路径、不做兜底扫描，失败时界面上毫无反馈，
+                            // 用户只会看到「切换成功但 IDE 没打开」——必须留日志可查。
+                            log::warn!("切换账号后启动 Trae 失败: {}", e);
+                        }
                     }).await;
                 });
             }
@@ -1090,7 +1121,9 @@ async fn switch_account(account_id: String, force: Option<bool>, state: State<'_
         // 隐私模式未启用，后台启动 Trae（不阻塞切换命令返回）
         tokio::spawn(async move {
             let _ = tokio::task::spawn_blocking(|| {
-                let _ = machine::open_trae();
+                if let Err(e) = machine::open_trae() {
+                    log::warn!("切换账号后启动 Trae 失败: {}", e);
+                }
             }).await;
         });
     }
@@ -1272,8 +1305,10 @@ async fn get_usage_events(
 }
 
 /// 从 Trae IDE 读取账号
+///
+/// 返回 `TraeIdeReadOutcome`（新增 / 补全 / 已存在 / 本机无登录态），前端据此给出准确提示
 #[tauri::command]
-async fn read_trae_account(state: State<'_, AppState>) -> Result<Option<Account>> {
+async fn read_trae_account(state: State<'_, AppState>) -> Result<TraeIdeReadOutcome> {
     let mut manager = state.account_manager.lock().await;
     manager.read_trae_ide_account().await.map_err(ApiError::from)
 }
@@ -1694,11 +1729,14 @@ pub fn run() {
             export_logs_cmd,
             clear_logs_cmd,
             get_log_file_path_cmd,
+            get_app_paths,
+            get_runtime_status,
             traework::commands::traework_overview,
             traework::commands::traework_discover,
             traework::commands::traework_save_current_login,
             traework::commands::traework_switch_account,
             traework::commands::traework_delete_snapshot,
+            traework::commands::traework_remove_account,
             traework::commands::traework_set_path,
             traework::commands::traework_scan_path,
             traework::commands::traework_reconcile,
@@ -1746,4 +1784,61 @@ async fn clear_logs_cmd() -> std::result::Result<(), String> {
 #[tauri::command]
 async fn get_log_file_path_cmd() -> std::result::Result<String, String> {
   Ok(logger::get_log_file_path().to_string_lossy().to_string())
+}
+
+/// 应用四类数据路径（设置页「数据与备份」整组取用）
+///
+/// 为什么四条路径合成一个命令而不是四个：设置页要一次渲染整组，四次 invoke 既慢，
+/// 又会让每个「打开所在目录」按钮各自处理取路径失败；路径口径集中在后端一处，
+/// 也避免前端自己拼 `%APPDATA%\hhj\trae-cc` 时把大小写拼错。
+/// 单项取不到时返回 `None` 而非整体报错——一个目录缺失不该让整组信息都看不见。
+#[derive(serde::Serialize)]
+struct AppPaths {
+    accounts: Option<String>,
+    settings: Option<String>,
+    logs: Option<String>,
+    traework_profiles: Option<String>,
+}
+
+#[tauri::command]
+async fn get_app_paths() -> AppPaths {
+    AppPaths {
+        accounts: AccountManager::get_data_path()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string()),
+        settings: get_settings_path()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string()),
+        logs: Some(logger::get_log_file_path().to_string_lossy().to_string()),
+        traework_profiles: traework::profile::profiles_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string()),
+    }
+}
+
+/// 运行时进程状态（设置页状态面板）
+///
+/// 为什么值得单开一个命令：设置页的操作几乎都有前置条件——清除登录状态要求 Trae 已关闭、
+/// 保存/切换 TraeWork 快照要求目标客户端没有进程占用。这些前提此前只写在警告文案里，
+/// 用户得自己猜；把「谁在运行」摆在按钮上方比写三行提示有效。
+#[derive(serde::Serialize)]
+struct RuntimeStatus {
+    trae_running: bool,
+    traework_running: bool,
+}
+
+#[tauri::command]
+async fn get_runtime_status() -> Result<RuntimeStatus> {
+    // 进程枚举是系统调用（EnumWindows / tasklist，后者要起子进程），
+    // 放到阻塞线程里跑，别占着 async 运行时。
+    let (trae_running, traework_running) = tauri::async_runtime::spawn_blocking(|| {
+        (machine::is_trae_running(), traework::proc::is_running())
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow::anyhow!("获取进程状态失败: {}", e)))?;
+
+    Ok(RuntimeStatus {
+        trae_running,
+        traework_running,
+    })
 }

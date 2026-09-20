@@ -533,6 +533,31 @@
   color: inherit;
 }
 
+/* 额度耗尽提示：原先挂在设置页的 Machine ID 卡上（与机器码语义无关），
+   换到账号卡片——用户是在浏览某个账号、发现额度用完时才需要这条引导 */
+.quota-exhausted-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  background: var(--bg-inset);
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.quota-exhausted-hint svg {
+  flex-shrink: 0;
+}
+
+/* 列表视图空间紧张：不新增行，只把「剩余」换成结论并标红 */
+.usage-left.exhausted {
+  color: var(--danger);
+}
+
 /* ── 用量区 ─────────────────────────────────────────────────── */
 .card-usage {
   padding: 12px;

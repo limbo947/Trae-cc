@@ -10,7 +10,7 @@ import { AccountLoginModal } from "./components/AccountLoginModal";
 import { Toast, ToastMessage } from "./components/Toast";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { Stats } from "./pages/Stats";
-import { Settings } from "./pages/Settings";
+import { Settings } from "./pages/settings/Settings";
 import { About } from "./pages/About";
 import { TraeworkPanel } from "./components/TraeworkPanel";
 
@@ -121,6 +121,12 @@ function App() {
   const toastDedupRef = useRef<Map<string, number>>(new Map());
   const autoCheckinRanRef = useRef(false);
 
+  // 账号切换进行中标志：定时刷新必须避开这段窗口——切换是全仓唯一「持锁做网络请求」
+  // 的路径（AGENTS §5.2），定时器此时插进来只会让两边互相拖慢。
+  const switchInProgressRef = useRef(false);
+  // 定时器回调要用最新账号列表，但列表变化不该重建定时器（重建会重置计时），故用 ref 传递
+  const traecodeAccountsRef = useRef<AccountWithUsage[]>([]);
+
   // 网络状态监听
   const offlineToastIdRef = useRef<string | null>(null);
 
@@ -224,8 +230,11 @@ function App() {
         if (active) {
           setAppSettings({
             auto_refresh_enabled: true,
+            refresh_interval: 30,
             privacy_auto_enable: true,
             auto_start_enabled: false,
+            auto_checkin_enabled: true,
+            theme: null,
           });
         }
       });
@@ -292,8 +301,13 @@ function App() {
   }, [loadAccounts]);
 
   // 自动签到（方案B）：启动时检查「今日是否已签」，未签的账号后台静默执行（不弹提示）
+  //
+  // 开关只作用于 GUI 启动：`--silent` 无头模式没有界面，签到静默失败也不影响用户，
+  // 那边保持「总是尝试」的既有行为（见 handle_silent_start）。
+  // 设置未加载完成时先不执行——否则会在用户已关闭开关的情况下抢跑一次。
   useEffect(() => {
     if (!hasLoaded || autoCheckinRanRef.current || accounts.length === 0) return;
+    if (!appSettings || !appSettings.auto_checkin_enabled) return;
     autoCheckinRanRef.current = true;
     void (async () => {
       try {
@@ -316,7 +330,48 @@ function App() {
         console.warn("[auto-checkin] 自动签到失败:", err);
       }
     })();
-  }, [hasLoaded, accounts, refreshUsageForAccounts]);
+  }, [hasLoaded, accounts, refreshUsageForAccounts, appSettings]);
+
+  // 定时刷新用量：间隔与开关都取自设置。
+  // 两个跳过条件是必要的——窗口不可见时用户看不到结果，白白打接口；
+  // 切换账号期间后端持锁做网络请求（全仓唯一特例），定时器插进去只会让两边互相拖慢。
+  useEffect(() => {
+    const enabled = appSettings?.auto_refresh_enabled ?? false;
+    const minutes = appSettings?.refresh_interval ?? 0;
+    if (!enabled || minutes <= 0) return;
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (switchInProgressRef.current) return;
+      void refreshUsageForAccounts(traecodeAccountsRef.current);
+    }, minutes * 60 * 1000);
+
+    return () => window.clearInterval(timer);
+  }, [appSettings?.auto_refresh_enabled, appSettings?.refresh_interval, refreshUsageForAccounts]);
+
+  // 主题变更：写进 settings.json（唯一存储）。
+  // 乐观更新是因为主题是即时可见的视觉状态，等接口往返会闪一下旧主题。
+  const handleThemeChange = useCallback(
+    async (theme: "light" | "dark") => {
+      setAppSettings((prev) => (prev ? { ...prev, theme } : prev));
+      try {
+        const base = appSettings ?? (await api.getSettings());
+        const saved = await api.updateSettings({ ...base, theme });
+        setAppSettings(saved);
+      } catch (err: any) {
+        addToast("error", err.message || "保存主题失败");
+      }
+    },
+    [appSettings, addToast]
+  );
+
+  // 主题迁移：老版本只把主题存在 localStorage，settings 里该字段为 null 时把它搬进来。
+  // 只在「从未设置过」时迁移，避免把用户已选的主题覆盖掉。
+  useEffect(() => {
+    if (!appSettings || appSettings.theme) return;
+    const legacy = localStorage.getItem("trae_theme_v1");
+    void handleThemeChange(legacy === "light" ? "light" : "dark");
+  }, [appSettings, handleThemeChange]);
 
   // 删除账号
   const handleDeleteAccount = async (accountId: string) => {
@@ -637,12 +692,16 @@ function App() {
       onConfirm: async () => {
         setConfirmModal(null);
         addToast("info", infoToast);
+        // 置位期间定时刷新跳过本轮：切换命令内部要持锁做 Token 刷新等网络请求
+        switchInProgressRef.current = true;
         try {
           await api.switchAccount(accountId, { force });
           await loadAccounts();
           addToast("success", successToast);
         } catch (err: any) {
           addToast("error", err.message || errorToast);
+        } finally {
+          switchInProgressRef.current = false;
         }
       },
     });
@@ -895,6 +954,8 @@ function App() {
   // TraeCode 账号子集：账号管理页/统计页/批量操作都只处理它，TraeWork 账号走独立面板
   //（两套切换机制相反，混在一个列表里会让用户按同一预期操作）
   const traecodeAccounts = accounts.filter((account) => !isTraeworkAccount(account));
+  // 定时器通过 ref 读最新列表：把列表写进定时器的依赖会让每次刷新都重建定时器、重置计时
+  traecodeAccountsRef.current = traecodeAccounts;
   const visibleAccounts = Array.isArray(accounts)
     ? [...accounts]
         .filter((account) => {
@@ -926,7 +987,12 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+      <Sidebar
+        currentPage={currentPage}
+        onNavigate={setCurrentPage}
+        theme={appSettings?.theme ?? null}
+        onThemeChange={handleThemeChange}
+      />
 
       <div className="app-content">
         {error && (
@@ -1134,6 +1200,7 @@ function App() {
             onToast={addToast}
             settings={appSettings}
             onSettingsChange={setAppSettings}
+            onAccountsChanged={loadAccounts}
           />
         )}
 

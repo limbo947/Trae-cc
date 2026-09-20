@@ -55,13 +55,16 @@ export function AddAccountModal({
     setError("");
 
     try {
-      const account = await api.readTraeAccount();
-      if (account) {
-        onToast?.("success", `成功读取 Trae IDE 账号: ${account.email}`);
-        onAccountAdded?.(account);
+      const result = await api.readTraeAccount();
+      // 后端已区分「新增 / 补全 / 已存在 / 本机无登录态」并给出文案。
+      // 只有真正改动了账号库才关闭弹窗；其余情形留在原地展示说明——尤其「已存在」不是错误，
+      // 但用户必须知道为什么不新增，否则只会反复点击（文案不再含糊地二选一）
+      if (result.status === "added" || result.status === "updated") {
+        if (result.account) onAccountAdded?.(result.account);
+        onToast?.("success", result.message);
         handleClose();
       } else {
-        setError("未找到 Trae IDE 登录账号或账号已存在");
+        setError(result.message);
       }
     } catch (err: any) {
       setError(err.message || "读取 Trae IDE 账号失败");

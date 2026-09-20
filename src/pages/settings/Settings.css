@@ -1,0 +1,133 @@
+/*
+ * 设置页专有样式。
+ *
+ * 为什么不写进 App.css：后者已约 4240 有效行（远超项目 800 行上限），设置页的样式
+ * 独立成文件后，后续改动不会再往那个文件里加东西。
+ * 通用骨架（.settings-page / .settings-section / .setting-item / .setting-btn /
+ * .pill-toggle 等）仍在 App.css，本文件只放设置页内部反复出现的组合样式——
+ * 这些模式此前以逐字重复的内联 style 散在 6 个分区组件里（同一个值展示框写了 4 遍）。
+ */
+
+/* 值框的相对定位容器（值框 + 右上角图标按钮） */
+.setting-value-wrap {
+  position: relative;
+  margin-top: 8px;
+}
+
+/* 等宽值展示框：机器码、安装路径 */
+.setting-value-box {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  word-break: break-all;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+}
+
+/* 右侧按钮数量不同，留白不同：两个按钮需要更宽的避让区 */
+.setting-value-box.with-two-actions {
+  padding-right: 80px;
+}
+
+.setting-value-box.with-one-action {
+  padding-right: 40px;
+}
+
+/* 值框右上角的图标按钮组 */
+.setting-value-actions {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  display: flex;
+  gap: 4px;
+}
+
+/* 标题旁的小标签（客户端唯一标识 / 注册表 MachineGuid / 强烈推荐） */
+.setting-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-weight: normal;
+}
+
+.setting-badge.success {
+  background: var(--success-bg);
+  color: var(--success);
+  border: 1px solid var(--success-border);
+}
+
+/* 状态面板的小胶囊 */
+.setting-chip {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.setting-chip.ok {
+  color: var(--success);
+}
+
+.setting-chip.normal {
+  color: var(--text-primary);
+}
+
+.setting-chip.muted {
+  color: var(--text-muted);
+}
+
+/* 数据分组的路径行 */
+.setting-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setting-path-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 96px;
+  flex-shrink: 0;
+}
+
+.setting-path-value {
+  flex: 1;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.setting-path-value.missing {
+  color: var(--text-muted);
+}
+
+/* 不可逆操作的确认输入框（清空账号库） */
+.setting-confirm-input {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  max-width: 240px;
+}
+
+/* 路径行里的小号按钮 */
+.setting-btn.sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}

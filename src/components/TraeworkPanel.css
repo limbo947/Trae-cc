@@ -100,6 +100,12 @@
   color: var(--danger);
 }
 
+/* 凭据即将失效：能用但需要关注，故与 danger（已失效）区分 */
+.traework-tag.warn {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
 .traework-actions {
   display: flex;
   align-items: center;
@@ -166,6 +172,13 @@
   align-items: center;
   gap: var(--space-sm);
   flex-wrap: wrap;
+  color: var(--text-primary);
+}
+
+/* 账号展示名：比 uid 略大，让它在列表里成为第一眼信息 */
+.traework-name {
+  font-size: 13.5px;
+  font-weight: 500;
   color: var(--text-primary);
 }
 

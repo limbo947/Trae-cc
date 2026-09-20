@@ -7,7 +7,7 @@
 
 - **名称**：Trae账号管理（应用标识 `com.hhj.trae-cc`），当前版本 **1.0.5**（三处同步：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`）
 - **定位**：Windows 桌面工具，管理多个 Trae 账号——**TraeCode（Trae CN）** 侧：账号存储、一键切换（改写 IDE 登录态与机器码）、用量查询/统计图表、每日签到（手动 + 开机自动）、机器码管理、隐私模式写入；**TraeWork（TRAE SOLO CN）** 侧：登录态快照 / 恢复式切换（2026-09 新增，见 §5.9）
-- **架构**：Tauri 2 应用 = React 19 前端（`src/`）+ Rust 后端（`src-tauri/src/`）。前后端仅通过 `#[tauri::command]` 通信，共注册 **55 个命令**（其中 8 个 TraeWork 命令定义在 `src-tauri/src/traework/commands.rs`，注册仍在 lib.rs）；前端统一走 `src/api.ts` 的 invoke 封装
+- **架构**：Tauri 2 应用 = React 19 前端（`src/`）+ Rust 后端（`src-tauri/src/`）。前后端仅通过 `#[tauri::command]` 通信，共注册 **58 个命令**（本地 49 + TraeWork 9；TraeWork 命令定义在 `src-tauri/src/traework/commands.rs`，注册仍在 lib.rs）；前端统一走 `src/api.ts` 的 invoke 封装
 - **目标平台**：仅 Windows 10/11 为完整实现（大量 `cfg(windows)` 分支）。例外：`autostart.rs` 的 macOS 分支是真实实现（LaunchAgents），其余 macOS/Linux 代码仅为可编译桩
 
 ## 2. 技术栈与关键依赖
@@ -29,7 +29,7 @@ npm run tauri build        # 生产构建（先 tsc && vite build，再 cargo bu
 
 - **构建期环境变量注入**：`src-tauri/build.rs` 会从当前目录起向上递归查找 `.env`，逐行输出 `cargo:rustc-env`（Rust 侧用 `option_env!` 读取，前端经 Vite 读取）。随快速注册功能删除，该机制目前没有任何消费方，保留仅为后续需要编译期注入时备用。
 - `tauri.conf.json` 中 `bundle.active = false`：默认构建不产出安装包，需要时临时开启，**勿提交开启状态**。
-- 无 lint 配置；根目录的 `check_quota*.mjs/.py` 是手动调试脚本，不是测试套件。Rust 侧有 `#[cfg(test)]` 单元测试（`device_id` / `checkin_guard` / `device_reset` / `tc_crypto` / `traework::*`），用 `cargo test --lib` 运行（2026-09 实测 36 个全绿）。TraeWork 侧覆盖：槽位名路径穿越拒绝、进程名白名单、快照往返（边车清除 + 对称恢复）、`.bak` 轮转与回退、uid 证据链与并列时拒绝识别、当前账号标记 BOM 剥离。
+- 无 lint 配置；根目录的 `check_quota*.mjs/.py` 是手动调试脚本，不是测试套件。Rust 侧有 `#[cfg(test)]` 单元测试（`device_id` / `checkin_guard` / `device_reset` / `tc_crypto` / `traework::*`），用 `cargo test --lib` 运行（2026-09-20 实测 47 个全绿）。TraeWork 侧覆盖：槽位名路径穿越拒绝、进程名白名单、快照往返（边车清除 + 对称恢复）、`.bak` 轮转与回退、uid 证据链与并列时拒绝识别、当前账号标记 BOM 剥离。
 - 修改注册表 MachineGuid 需管理员权限，调试相关功能时请以管理员身份运行（非管理员时写入静默失败，见 5.2）。
 - **构建必须走 Tauri CLI，不要用裸 `cargo build --release`**：裸 cargo 拿不到 CLI 注入的环境变量，产出的是「开发模式」二进制——运行时去连 Vite 开发服务器 `localhost:1420` 而非加载内嵌前端，界面报 `ERR_CONNECTION_REFUSED`「无法访问此页面」。识别特征：体积少约 0.37MB（正是内嵌前端资源大小），且应用日志停在 `Initializing account manager...` 之后无任何记录（前端未加载）。正确产物约 **7.62MB**（2026-09-20 加入 TraeWork 槽位修复后实测值；此前 7.59MB 为 TraeWork 初版、7.49MB 为移除快速注册时的值；随功能增减会变，判断标准是「是否少了约 0.37MB」而非绝对值）。另注意 `tauri build` 会出现 `#[warn(linker_messages)]`（MSVC `link.exe` 的「正在创建库 …dll.lib 和对象 ….exp」经 stdout 被当警告），**非错误**，`cargo check` 为零警告不代表构建有问题。
 - 链接阶段偶发失败（`link.exe` 退出码 `0xc0000142`，DLL 初始化失败，多见于系统资源紧张或杀软干扰）时，库本身已编译成功，直接重跑同一条构建命令即可通过。
@@ -44,14 +44,15 @@ trae-cc/
 │   ├── types/index.ts          # Account / UsageSummary / AppSettings 等共享类型
 │   ├── hooks/useThemeColors.ts # 主题色 Hook
 │   ├── App.css                 # ⚠ 全部样式，严重超限（2026-09 已清除尾部扫码领号弹窗死样式，760 行），新增样式优先放组件级 CSS
-│   ├── pages/                  # Stats（用量图表）、Settings、About
+│   ├── pages/                  # Stats（用量图表）、About、settings/（设置页：Settings 容器 + 分区组件 + Settings.css）
+│   ├── utils/                  # accountBackup.ts（账号库导入/导出的共享实现，设置页与添加弹窗共用一份）
 │   └── components/             # AccountCard、AddAccountModal、DashboardWidgets、DetailModal、TraeworkPanel（TraeWork 面板 + 同名 CSS）等
 ├── doc/                        # 方案与调研文档（含 TraeWork账号切换计划.md）
 ├── src-tauri/
 │   ├── build.rs                # 向上递归查找 .env，输出 cargo:rustc-env 注入编译期变量（当前无消费方）
-│   ├── src/lib.rs              # 应用入口：47 个本地命令 + AppState + 浏览器登录/open_pricing 注入脚本（⚠ 有效约 1500 行，
+│   ├── src/lib.rs              # 应用入口：49 个本地命令 + AppState + 浏览器登录/open_pricing 注入脚本（⚠ 有效约 1500 行，
 │   │                           #   其中 build_browser_login_script 的 JS 字符串约 480 行，勿再继续膨胀）
-│   ├── src/traework/           # TraeWork（TRAE SOLO CN）账号切换：profile（常量+白名单 15 项）/snapshot（备份恢复原语+对称恢复）/proc（三级关闭）/locate（exe 五级发现）/uid（证据链+置信度门槛）/commands（7 个命令）
+│   ├── src/traework/           # TraeWork（TRAE SOLO CN）账号切换：profile（常量+白名单 15 项）/snapshot（备份恢复原语+对称恢复）/proc（三级关闭）/locate（exe 五级发现）/uid（证据链+置信度门槛）/commands（9 个命令）
 │   ├── src/account/            # 账号域：account_manager.rs（CRUD/切换/刷新/签到落盘，⚠ 有效 1160 行）、types.rs
 │   ├── src/api/                # Trae API 客户端：trae_api.rs（双认证 + 多端点回退，有效 784 行，临近上限）、cn_credits.rs（CN 积分钟额度查询/解析 + 通用/Work 拆分）、checkin.rs（每日签到：状态/领取 + 判定 + 冷却准入 + 重试轮次）、checkin_guard.rs（冷却策略表 + 防重入）、device_id.rs（签到设备号派生/脱敏）、types.rs
 │   ├── src/machine.rs          # 机器码（注册表 MachineGuid）、Trae 路径扫描、进程 kill/open、写 storage.json（有效 665 行）
@@ -73,7 +74,8 @@ trae-cc/
 | src-tauri/src/api/trae_api.rs | 784 | 临近上限 |
 | src/components/DashboardWidgets.tsx | 695 | 临近上限 |
 | src-tauri/src/machine.rs | 665 | 尚可，但总行数 910 偏大 |
-| src/components/DetailModal.tsx / Settings.tsx | 约 530 / 596 | 观察名单 |
+| src/components/DetailModal.tsx | 约 530 | 观察名单 |
+| src/pages/settings/（Settings 容器 + 7 个分区组件 + shared.ts） | 容器约 130，其余 55–260 | 2026-09-20 从单文件 Settings.tsx（641 行）拆出，均已低于上限 |
 | src-tauri/src/api/checkin.rs | 490 | 尚可（含新增冷却/重试轮次） |
 | src-tauri/src/api/checkin_guard.rs / device_id.rs / device_reset.rs | 158 / 95 / 73 | 新增模块（含单元测试） |
 | src-tauri/src/traework/snapshot.rs | 517 | 新增，含备份/恢复/对称清理/轮转/校验 + 归位改名 + 按白名单瘦身 |
@@ -105,6 +107,9 @@ trae-cc/
 
 `clear_trae_login_state` 不先 `kill_trae`，因此**运行中执行时跳过 aha 重置并告警**（不新增 kill 行为，避免改变其既有语义）。aha 层细节见 §5.8。
 
+**为什么上述步骤不清理 `Partitions\`（2026-09-20 实测结论，勿"补全"）**：`%APPDATA%\Trae CN\Partitions\` 下两个 profile（`trae-webview`、`icube-web-crawler-shared-session-v1.0`）是客户端**内置浏览器**的通用 Chromium profile。把两者的「origin + 键名」全量提取后，53 + 21 个键**全部**是用户访问过的站点（figma / volcengine / baidu / github / bilibili / 番茄小说 / 本地 localhost 开发服务）的 Cookie 与 Local Storage，来自 `trae.com.cn` 的键 **0 个**（`Network\Cookies` 里 trae 域名同样 0 命中）。它与账号、登录态、设备标识都无关，删它只会丢掉用户在内置浏览器里的登录态与浏览记录。**TraeWork 快照白名单包含这些路径不是"口径不一致"**：TraeWork 是快照/恢复（拷走再还原，为完整还原账号上下文），TraeCode 是就地删除——场景不同，口径本就该不同。
+（注意：对该目录做 ASCII 子串检索会命中 `device` / `uid` / `token`，那是站点脚本字段名与 Chromium 的 `Trust Tokens` 文件造成的**误命中**。凡是判断「某目录是否承载某类数据」，必须拿到键名/域名级证据，不能凭子串下结论。）
+
 ### 5.3 Token 生命周期
 
 - 优先 JWT：请求头为 `Authorization: Cloud-IDE-JWT <token>`；401 时用 Cookies 调 `GetUserToken` 刷新并回写账号。
@@ -120,6 +125,8 @@ trae-cc/
 ### 5.5 已移除的能力（历史沿革）
 
 快速注册 / 扫码领号功能已于 2026-09 整体删除（代理后端不可用），对应前端入口、`quick_register_backend.rs`、`custom_tempmail.rs`、`quick_register_simple.rs` 与 `quick_register` / `quick_register_with_custom_tempmail` 命令均已不存在。`AppSettings` 中的 `quick_register_show_window` / `api_key` / `custom_tempmail_config` 字段一并移除（旧 settings.json 里的残留字段会被 serde 静默忽略）。**新增账号只走浏览器登录 / 从 Trae 读取 / 导入三条路径，勿再引入注册链路。**
+
+另有两个「从未被注册过」的命令：`add_account`（仅用 Cookies 添加）与 `update_cookies` 在 `lib.rs` 的 `generate_handler!` 里查无此名（2026-09-20 实测），而 `api.ts` 却为它们写了封装——属调用必失败的死封装，已删除。新增账号请用 `add_account_by_token` / `add_account_by_email` / 浏览器登录这三条已注册路径。
 
 ### 5.6 无头模式（--silent）
 
@@ -171,11 +178,44 @@ trae-cc/
 
 两道防线（配合上面那条才完整）：① **备份后自校验槽名**（`verify_slot_name`）——以快照内部解出的 userId 为最终裁决，不符即改名归位，判据不依赖任何外部字段时序；② **切换前不符即拒绝**，避免"点切换到 X 实际登录成 Y"。`account_id_from_storage()` / `slot_account_id()` 让"实时现场"与"快照内容"共用同一判据。
 
-**命令（8 个，注册在 lib.rs，实现均在 `traework/commands.rs`）**：`traework_overview`（当前账号/进程/各槽快照状态/孤儿槽）、`traework_discover`（uid 判定）、`traework_save_current_login`、`traework_switch_account`、`traework_delete_snapshot`、`traework_set_path`、`traework_scan_path`、**`traework_reconcile`（修复槽位：错位快照按真实账号改名归位 + 登记缺失账号 + 按白名单清理存量快照，目标槽位已存在时拒绝覆盖）**。全部把阻塞工作（`tasklist` / `std::fs`）放进 `spawn_blocking`，锁只在取账号信息时短暂持有。孤儿槽/错位槽的入口就是这个「修复槽位」按钮，没有别的路径。
+**命令（9 个，注册在 lib.rs，实现均在 `traework/commands.rs`）**：`traework_overview`（当前账号/进程/各槽快照状态/孤儿槽）、`traework_discover`（uid 判定）、`traework_save_current_login`、`traework_switch_account`、`traework_delete_snapshot`、`traework_remove_account`（删账号记录并连同磁盘快照，与「删除快照」的区别是后者只删文件、账号仍在列表里）、`traework_set_path`、`traework_scan_path`、**`traework_reconcile`（修复槽位：错位快照按真实账号改名归位 + 登记缺失账号 + 按白名单清理存量快照，目标槽位已存在时拒绝覆盖）**。全部把阻塞工作（`tasklist` / `std::fs`）放进 `spawn_blocking`，锁只在取账号信息时短暂持有。孤儿槽/错位槽的入口就是这个「修复槽位」按钮，没有别的路径。
 
 **前端**：独立侧边栏页「TraeWork」（`src/components/TraeworkPanel.tsx` + 同名 CSS）。账号管理页/统计页/批量操作**只处理 traecode 账号**（`isTraeworkAccount` 过滤），两套切换机制相反，混在一个列表里会让用户按同一预期连点。**进度反馈刻意不用 Tauri 事件流**：本仓库此前没有任何 `emit` 用法，为单一功能引入事件通道会带来订阅时机/事件丢失一整套新问题；当前做法是进行中遮罩 + 已耗时秒表 + 结果里回传分步日志（`StepCollector`），已满足「明确进度、防连点」的原始诉求。
 
 **traecode 侧准入判据**：`Account.is_traecode()` 已加到 `list_accounts_for_checkin`、`checkin_one_account`、`AccountManager::refresh_token`、`get_account_usage` 四处。**新增任何遍历全量账号的 traecode 链路时，必须同样先过滤**，否则 TraeWork 账号会产生一串误导性失败。
+
+### 5.10 已注册但无 UI 入口的命令（清单，避免重复推导）
+
+「某个命令到底有没有调用者」此前每次都要逐个 grep 确认，很费轮次。以下为 2026-09-20 逐个 grep 的实测结果，**改动时请同步更新本节**。
+
+**仍无前端调用点（6 个）**：
+
+| 命令 | 说明 |
+|---|---|
+| `set_machine_id` | 设置页只提供读取与随机重置，不提供写入任意值 |
+| `bind_account_machine_id` | 账号级机器码绑定，目前仅后端流程使用 |
+| `set_trae_machine_id` | 设置页只展示 Trae 的 `machineid`；该文件由切换账号 / 清除登录状态写入 |
+| `export_accounts`（无路径版） | 导出统一走 `export_accounts_to_path`（配文件对话框） |
+| `update_account_token` | 前端靠 `get_account_usage` 触发 Token 刷新与回写 |
+| `download_and_run_installer` | 更新改走 `tauri-plugin-updater` 的 `check_update` / `install_update` |
+
+**本轮（2026-09-20）接通的 8 个历史闲置命令**：`get_machine_id`、`reset_machine_id`、`clear_accounts`、`export_logs_cmd`、`clear_logs_cmd`、`get_log_file_path_cmd`、`check_update`、`install_update` —— 全部接进设置页「机器码 / 日志 / 数据与备份」或关于页。
+
+**从未注册的死封装（已删）**：`add_account`、`update_cookies`。注意与上表不同——上表是「后端有、前端没调」，这两个是「前端有封装、后端根本没注册」，调用必失败。详见 §5.5。
+
+其余命令均有前端调用点（含 `get_usage_events`，由 `UsageEvents.tsx` 调用；`cancel_browser_login`，由 `AddAccountModal` 调用）。
+
+### 5.11 设置项必须能指出消费方（2026-09-20 起）
+
+新增任何 `AppSettings` 字段时，必须能回答「哪一行读它」。此前设置页挂着两个死开关——`auto_refresh_enabled` 存得下却没有任何定时器读它、刷新间隔连字段都不存在——根因就是没有这条约束。当前字段与消费方的对应关系：
+
+| 字段 | 消费方 |
+|---|---|
+| `auto_refresh_enabled` + `refresh_interval` | `App.tsx` 的定时刷新 `useEffect`（窗口不可见时跳过、`switchInProgressRef` 置位期间跳过——切换是唯一持锁做网络请求的路径） |
+| `auto_checkin_enabled` | `App.tsx` 自动签到 `useEffect` 的准入条件。**只作用于 GUI 启动路径**，`--silent` 无头模式保持「总是尝试」（那边没有界面，签到静默失败不影响用户） |
+| `privacy_auto_enable` | `switch_account` 命令层（lib.rs），决定是否走「启动 IDE → 写隐私模式 → 二次重启」 |
+| `auto_start_enabled` | `update_settings` 写 HKCU Run；启动时用落盘值重写一次（注册表写失败可自愈，故允许降级为日志警告） |
+| `theme` | `ThemeSwitcher`（经 `App.tsx` 透传到 `Sidebar`）。存储已从 `localStorage` 迁入 settings.json；`theme` 为 `null` 表示从未设置过，前端据此从旧的 `trae_theme_v1` 迁移一次 |
 
 ## 6. 编码约定
 

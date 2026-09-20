@@ -1,4 +1,4 @@
-//! Trae CN "tc" 登录态加密格式的写入端实现。
+//! Trae CN "tc" 登录态加密格式的读写实现（切换流程用其加密写入，账号识别用其解密读取）。
 //!
 //! 背景：新版 Trae CN（实测 2.3.85576）把 storage.json 中的 `iCubeAuthInfo://icube.cloudide`
 //! 从明文 JSON 改为自定义加密格式，导致旧版"写明文登录态"的切换机制失效（表现为切换后要重新登录）。
@@ -81,8 +81,11 @@ pub fn encrypt_storage_value(plaintext: &str) -> Result<String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(out))
 }
 
-/// 解密 tc 格式（用于验证与调试；切换流程本身只需加密）
-#[allow(dead_code)]
+/// 解密 tc 格式
+///
+/// 除了测试与调试，读取侧也依赖它：「读取本地 Trae IDE 账号」（`account_manager`）与 TraeWork 的
+/// 账号识别（`traework::uid`）都要把客户端写下的密文还原成 JSON。写入侧只需加密，故本函数曾长期
+/// 标注 `#[allow(dead_code)]`，勿再移除消费方而不恢复该标注。
 pub fn decrypt_storage_value(b64: &str) -> Result<String> {
     use cbc::cipher::BlockDecryptMut;
     let buf = base64::engine::general_purpose::STANDARD

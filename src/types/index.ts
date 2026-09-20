@@ -50,6 +50,20 @@ export interface Account {
   snapshot_slot?: string | null;
 }
 
+/** 「从 Trae IDE 读取账号」的结果状态 */
+export type TraeIdeReadStatus = "added" | "updated" | "exists" | "no_login";
+
+/**
+ * 「从 Trae IDE 读取账号」的结果。
+ * message 由后端统一撰写：同一状态只应有一份文案，前端再拼一遍必然与后端口径漂移
+ */
+export interface TraeIdeReadOutcome {
+  status: TraeIdeReadStatus;
+  /** 涉及到的账号（added/updated/exists 时给出，用于直接刷新列表项） */
+  account: Account | null;
+  message: string;
+}
+
 // ============ TraeWork（TRAE SOLO CN）============
 //
 // TraeWork 采用「登录态快照 / 恢复」而非改写登录态：其登录真源是 storage.json 与
@@ -61,6 +75,8 @@ export interface TraeworkUidEvidence {
   confident: boolean;
   candidates: string[];
   reason: string;
+  /** 展示名（登录态里的用户名；取不到为 null）。仅用于显示，不可用于判定身份 */
+  display_name: string | null;
 }
 
 /** 单个快照槽状态 */
@@ -70,6 +86,14 @@ export interface TraeworkSlotStatus {
   bak_exists: boolean;
   bytes: number;
   modified_at: number | null;
+  /**
+   * 快照内凭据的到期时刻（RFC3339；解不出为 null）。
+   *
+   * 两者语义不同，别混用：access 过期只意味着切过去时客户端要静默续期一次，真正决定
+   * 「该槽位必须重新登录」的是 refresh——所以警示口径按 refresh_expired_at 判定。
+   */
+  expired_at: string | null;
+  refresh_expired_at: string | null;
 }
 
 /** TraeWork 概览 */
@@ -218,9 +242,67 @@ export interface ApiError {
 
 export interface AppSettings {
   auto_refresh_enabled: boolean;
+  /** 用量自动刷新的间隔（分钟）；0 视为不刷新 */
+  refresh_interval: number;
   privacy_auto_enable: boolean;
   auto_start_enabled: boolean;
+  /** 启动时静默自动签到（`--silent` 无头模式不受此开关影响） */
+  auto_checkin_enabled: boolean;
+  /**
+   * 界面主题：`light` / `dark`。
+   * null 表示从未设置过（老版本只存 localStorage），前端据此决定是否迁移。
+   */
+  theme: string | null;
 }
+
+/**
+ * 应用数据路径。四项均为「文件或目录的绝对路径」，可直接交给 revealItemInDir 定位。
+ * 取不到的项为 null（例如 ProjectDirs 在该系统上不可用），前端按「未找到」渲染，
+ * 不要让整组因为一项缺失而消失。
+ */
+export interface AppPaths {
+  /** 账号库 accounts.json */
+  accounts: string | null;
+  /** 设置 settings.json */
+  settings: string | null;
+  /** 日志 app.log */
+  logs: string | null;
+  /** TraeWork 快照根目录 */
+  traework_profiles: string | null;
+}
+
+/**
+ * 运行时进程状态（后端 `get_runtime_status`）。
+ *
+ * 注意：`trae_running` 在非 Windows/macOS 上是常量 false（`machine.rs` 的占位实现），
+ * 前端不应据此断言「未运行」——本项目只面向 Windows，该分支实际不会走到。
+ */
+export interface RuntimeStatus {
+  trae_running: boolean;
+  traework_running: boolean;
+}
+
+/**
+ * 更新检查结果（后端 `check_update` 返回；没有新版本时为 null）。
+ * 字段直接对应 tauri-plugin-updater 的 Update，body/date 可能缺失。
+ */
+export interface UpdateInfo {
+  version: string;
+  current_version: string;
+  body: string | null;
+  date: string | null;
+}
+
+/**
+ * Toast 回调签名，与 `App.tsx` 的 `addToast` 对齐。
+ * 放在共享类型里而不是某个页面的内部文件：设置页分区与 utils 下的导出/导入
+ * 都要用它，各自复制一份会在改签名时漏掉一处。
+ */
+export type ToastFn = (
+  type: "success" | "error" | "warning" | "info",
+  message: string,
+  duration?: number
+) => void;
 
 // 用户统计数据
 export interface UserStatisticData {

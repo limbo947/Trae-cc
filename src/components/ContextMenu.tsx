@@ -93,9 +93,13 @@ export function ContextMenu({
           <span className="icon">🔑</span>
           复制 Token
         </div>
-        <div className="context-menu-item" onClick={onBuyPro}>
+        <div
+          className="context-menu-item"
+          onClick={onBuyPro}
+          title="额度用尽时升级专业版；不升级可改用其他账号"
+        >
           <span className="icon">🛒</span>
-          购买 Pro
+          升级 / 购买 Pro
         </div>
         <div className="context-menu-divider" />
         <div className="context-menu-item danger" onClick={onDelete}>

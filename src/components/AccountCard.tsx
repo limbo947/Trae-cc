@@ -81,6 +81,10 @@ export function AccountCard({ account, usage, selected, checkedInToday, onSelect
 
   const isTokenExpired = false; // TODO: 根据实际 token 过期时间判断
 
+  // 额度耗尽信号：只有拿到用量后才判断——usage 为 null 表示数据尚未取到，
+  // 此时提示会被误读成「这个账号的额度已经用完了」
+  const quotaExhausted = hasUsage && totalLeft <= 0;
+
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
     const textToCopy = account.name || account.email;
@@ -275,6 +279,19 @@ export function AccountCard({ account, usage, selected, checkedInToday, onSelect
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 额度耗尽提示：原先挂在设置页的 Machine ID 卡上，与卡片语义（机器码）无关；
+          换到账号卡片是因为用户正是在「某个账号额度用完」的上下文里才需要这条引导 */}
+      {quotaExhausted && (
+        <div className="quota-exhausted-hint">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12" y2="16"/>
+          </svg>
+          <span>额度已用尽：可升级专业版，或改用其他账号</span>
         </div>
       )}
 

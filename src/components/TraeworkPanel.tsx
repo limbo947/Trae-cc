@@ -5,6 +5,7 @@ import type {
   AccountBrief,
   TraeworkActionResult,
   TraeworkOverview,
+  TraeworkSlotStatus,
   TraeworkStep,
   TraeworkUidEvidence,
 } from "../types";
@@ -31,6 +32,43 @@ function formatTime(sec: number | null): string {
   const d = new Date(sec * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 阈值：凭据剩余不足这个天数就提前警示（用户仍来得及切一次并重新保存） */
+const CREDENTIAL_WARN_DAYS = 30;
+
+/**
+ * 快照凭据状态：这张卡还能免登录多久。
+ *
+ * 为什么按 refresh 而不是 access 判定「失效」：槽位里两份凭据的寿命差一个量级——access 只活
+ * 14 天，但它过期只是让客户端在启动时静默续期一次；真正决定「这个槽位必须重新登录」的是
+ * refresh（客户端记录的期限是签发后 180 天）。只盯 access 会把仍可用的槽位误标成失效。
+ */
+function credentialInfo(snap: TraeworkSlotStatus | undefined): {
+  level: "ok" | "warn" | "danger";
+  /** 标题行上的警示标签（正常状态为 null，避免每张卡都挂满徽标） */
+  tag: string | null;
+  /** meta 行上的说明文字 */
+  text: string;
+  /** 悬停提示：access 的到期时间只影响「切过去要不要静默续期」，放在这里不占版面 */
+  title: string;
+} | null {
+  const refresh = snap?.refresh_expired_at;
+  if (!refresh) return null;
+  const ms = Date.parse(refresh);
+  if (Number.isNaN(ms)) return null;
+
+  const day = refresh.slice(0, 10);
+  const access = snap?.expired_at;
+  const title = access ? `access token 到期 ${access}` : "";
+  const days = Math.ceil((ms - Date.now()) / 86400000);
+  if (days <= 0) {
+    return { level: "danger", tag: "凭据已失效", text: `凭据 ${day} 已过期，需重新登录该账号再保存一次`, title };
+  }
+  if (days <= CREDENTIAL_WARN_DAYS) {
+    return { level: "warn", tag: `凭据 ${days} 天后失效`, text: `凭据续期至 ${day}`, title };
+  }
+  return { level: "ok", tag: null, text: `凭据续期至 ${day}`, title };
 }
 
 /**
@@ -88,7 +126,12 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
 
   /** 统一的动作包装：闸门 + 结果落地 + 错误上报 */
   const runAction = useCallback(
-    async (label: string, action: () => Promise<TraeworkActionResult>) => {
+    async (
+      label: string,
+      action: () => Promise<TraeworkActionResult>,
+      // 切换的返回文案带「建议重新保存登录态」的提醒，比其余动作长，需要更长的展示时间
+      successDuration = 3000,
+    ) => {
       if (inFlight.current) {
         onToast?.("warning", "已有 TraeWork 操作进行中，请等待其结束");
         return;
@@ -100,7 +143,7 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
       try {
         const result = await action();
         setSteps(result.steps);
-        onToast?.("success", result.message, 3000);
+        onToast?.("success", result.message, successDuration);
       } catch (err: any) {
         onToast?.("error", err?.message || `${label}失败`, 6000);
       } finally {
@@ -124,8 +167,10 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
 
   const handleSwitch = useCallback(
     (account: AccountBrief) => {
-      runAction(`切换到 ${account.uid ?? account.name}`, () =>
-        api.traeworkSwitchAccount(account.id),
+      runAction(
+        `切换到 ${account.uid ?? account.name}`,
+        () => api.traeworkSwitchAccount(account.id),
+        9000,
       );
     },
     [runAction],
@@ -145,6 +190,28 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
           account: null,
         };
       });
+    },
+    [runAction],
+  );
+
+  /**
+   * 移除账号（记录 + 快照一起删）。
+   *
+   * 为什么需要它：TraeWork 账号在账号管理页被过滤掉，本面板是它唯一的出口；而「删除快照」
+   * 只删磁盘文件，账号记录会留在列表里变成「无快照」条目——用户找不到任何入口清掉它。
+   */
+  const handleRemoveAccount = useCallback(
+    (account: AccountBrief) => {
+      const slot = account.uid ?? account.name;
+      if (
+        !window.confirm(
+          `确定移除账号 ${slot} 吗？账号记录与磁盘上的快照（含回退代）都会被删除，此操作无法撤销。\n\n` +
+            `注：TraeWork 侧的登录状态不受影响，账号本身也不会被注销；如需再次使用，重新登录一次并「保存当前登录态」即可。`,
+        )
+      ) {
+        return;
+      }
+      runAction(`移除 ${slot}`, () => api.traeworkRemoveAccount(account.id), 6000);
     },
     [runAction],
   );
@@ -180,7 +247,10 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
     try {
       const found = await api.traeworkScanPath();
       if (found) {
-        onToast?.("success", `已找到 TraeWork：${found}`);
+        // `traework_scan_path` 只返回路径、不落盘（与 TraeCode 的 scan 同款），
+        // 不显式保存的话这次扫描在重启后消失，而设置页那边会一直显示「未设置」
+        await api.traeworkSetPath(found);
+        onToast?.("success", `已找到并保存 TraeWork：${found}`);
         await refresh();
       } else {
         onToast?.("warning", "未自动找到 TraeWork，请手动指定 TRAE SOLO CN.exe");
@@ -211,6 +281,17 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
     return overview?.snapshots.find((s) => s.slot === slot);
   };
 
+  // 当前账号把 uid 映射成可读名，避免这一行只给一串数字
+  const currentSlot = overview?.current_slot ?? null;
+  const currentAccount = currentSlot
+    ? traeworkAccounts.find((a) => (a.uid ?? a.name) === currentSlot)
+    : undefined;
+  const currentLabel = !currentSlot
+    ? "未记录"
+    : currentAccount && currentAccount.name && currentAccount.name !== currentSlot
+      ? `${currentAccount.name}（${currentSlot}）`
+      : currentSlot;
+
   const busy = busyLabel !== null;
 
   return (
@@ -237,7 +318,7 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
         </div>
         <div className="traework-row">
           <span className="traework-label">当前账号</span>
-          <span className="traework-value">{overview?.current_slot ?? "未记录"}</span>
+          <span className="traework-value">{currentLabel}</span>
         </div>
         <div className="traework-row">
           <span className="traework-label">安装路径</span>
@@ -280,6 +361,11 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
           先在 TraeWork 里登录目标账号，再点「保存当前登录态」；换账号时用列表里的「切换」。
           若快照与槽名不符（切换被拒绝时提示），点「修复槽位」归位。
         </p>
+        <p className="traework-hint">
+          列表里的「删除快照」只清磁盘、账号保留（之后可重新登录再存一次）；想让账号从这个列表
+          里彻底消失，用「移除账号」。卡片上的「凭据续期至」是该槽位还能免登录的期限，快到期时
+          会有警示——切过去用一次并重新「保存当前登录态」即可续上。
+        </p>
       </section>
 
       <section className="traework-list">
@@ -290,12 +376,15 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
         {traeworkAccounts.map((account) => {
           const snap = snapshotOf(account);
           const slot = account.uid ?? account.name;
+          // 名字与 uid 不同才说明已回填过真实用户名；相同则直接展示 uid（等价于旧行为）
+          const displayName = account.name && account.name !== slot ? account.name : slot;
           const isCurrent = overview?.current_slot === slot;
+          const cred = credentialInfo(snap);
           return (
             <div className="traework-item" key={account.id}>
               <div className="traework-item-main">
                 <div className="traework-item-title">
-                  <span className="mono">{slot}</span>
+                  <span className="traework-name">{displayName}</span>
                   {isCurrent && <span className="traework-tag ok">当前</span>}
                   {snap?.exists ? (
                     <span className="traework-tag">{formatBytes(snap.bytes)}</span>
@@ -303,9 +392,11 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
                     <span className="traework-tag danger">无快照</span>
                   )}
                   {snap?.bak_exists && <span className="traework-tag">可回退代</span>}
+                  {cred?.tag && <span className={`traework-tag ${cred.level}`}>{cred.tag}</span>}
                 </div>
-                <div className="traework-item-meta">
-                  快照时间 {formatTime(snap?.modified_at ?? null)}
+                <div className="traework-item-meta" title={cred?.title || undefined}>
+                  <span className="mono">{slot}</span> · 快照时间 {formatTime(snap?.modified_at ?? null)}
+                  {cred && <> · {cred.text}</>}
                 </div>
               </div>
               <div className="traework-item-actions">
@@ -323,8 +414,18 @@ export function TraeworkPanel({ accounts, onToast, onAccountsChanged }: Traework
                   className="traework-mini-btn danger"
                   onClick={() => handleDeleteSnapshot(account)}
                   disabled={busy || !snap?.exists}
+                  title="只删除磁盘上的快照，账号仍留在列表里（之后可重新登录再保存）"
                 >
                   删除快照
+                </button>
+                <button
+                  type="button"
+                  className="traework-mini-btn danger"
+                  onClick={() => handleRemoveAccount(account)}
+                  disabled={busy}
+                  title="删除账号记录及其快照，账号不再出现在列表里"
+                >
+                  移除账号
                 </button>
               </div>
             </div>

@@ -130,12 +130,21 @@ fn action_gate() -> &'static Mutex<()> {
 /// 为什么要关客户端：Electron 在运行时持有 leveldb / vscdb 的文件句柄，运行中拷贝
 /// 会静默缺文件（快照「看起来成功」但恢复后登录态不全）。这是「保存」也必须关客户端的
 /// 唯一原因，不是保守。
-pub fn save_current_login(ctx: &Ctx, slot: &str, sink: &dyn ProgressSink) -> Result<usize, String> {
+pub fn save_current_login(
+    ctx: &Ctx,
+    slot: &str,
+    sink: &dyn ProgressSink,
+) -> Result<SaveOutcome, String> {
     let _guard = action_gate()
         .try_lock()
         .map_err(|_| "已有 TraeWork 操作进行中，请稍后再试".to_string())?;
 
     profile::ensure_slot_safe(slot)?;
+    // 保留槽不接受保存：`last` 是切换流程专用的「切换前现场」滚动备份，写进去会顶掉用户
+    // 唯一的回退保底；而槽名来自 storage.json 的 `userId`，是被构造的值也能落进这里
+    if snapshot::is_reserved_slot(slot) {
+        return Err(format!("{slot} 是保留槽名，不能作为账号槽位"));
+    }
     sink.step("init", StepStatus::Info, &format!("开始保存账号 {slot} 的登录态"));
 
     proc::stop(sink)?;
@@ -151,9 +160,38 @@ pub fn save_current_login(ctx: &Ctx, slot: &str, sink: &dyn ProgressSink) -> Res
     snapshot::write_current_slot(ctx, &slot)?;
     sink.step("mark", StepStatus::Info, &format!("当前 TraeWork 账号标记为 {slot}"));
 
+    // 展示信息（用户名等）顺手取回：调用方要用它给账号记录命名，
+    // 否则界面上只剩一串 uid，用户无法分辨哪个是哪个
+    let profile = uid::slot_profile(ctx, &slot);
+    if let Some(p) = &profile {
+        sink.step(
+            "mark",
+            StepStatus::Info,
+            &format!("账号展示名：{}", p.display_name()),
+        );
+    }
+
     let exe = locate::find_exe()?;
     proc::start(&exe, sink)?;
-    Ok(copied)
+    Ok(SaveOutcome {
+        slot,
+        copied,
+        profile,
+    })
+}
+
+/// 保存登录态的结果
+///
+/// 为什么把槽位回传：`verify_slot_name` 可能纠正槽名（uid 来源滞后时就会发生），调用方若
+/// 仍用自己传入的那个槽名去写账号记录，就会把账记到错误的槽上——这正是最初事故的形状。
+#[derive(Debug, Clone)]
+pub struct SaveOutcome {
+    /// 实际落盘的槽位（可能与入参不同）
+    pub slot: String,
+    /// 成功拷贝的条目数
+    pub copied: usize,
+    /// 账号展示信息（用户名/脱敏手机/头像），解不出时为 None
+    pub profile: Option<uid::AccountProfile>,
 }
 
 /// 校验 `槽名 == 快照内解出的账号 id`；不符则把快照改名归位，返回纠正后的槽名
@@ -191,6 +229,18 @@ fn verify_slot_name(ctx: &Ctx, slot: &str, sink: &dyn ProgressSink) -> Result<St
     Ok(actual)
 }
 
+/// 槽位的账号展示信息（供调用方回填账号名）
+///
+/// 为什么修复时要一并解出：存量账号记录的 `name` 是当初拿 uid 顶上的（那时还没有解析
+/// 展示字段的能力）。不回填的话，用户必须把每个账号重新登录保存一遍才能看到用户名——
+/// 而数据（用户名）本来就在快照里躺着。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SlotIdentity {
+    pub slot: String,
+    pub username: Option<String>,
+    pub mobile: Option<String>,
+}
+
 /// 修复报告
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ReconcileReport {
@@ -202,6 +252,8 @@ pub struct ReconcileReport {
     pub slots: Vec<String>,
     /// 清理白名单外历史文件释放的总字节数
     pub freed_bytes: u64,
+    /// 各槽位解出的账号展示信息（用于回填账号名）
+    pub identities: Vec<SlotIdentity>,
 }
 
 /// 整理快照目录：把「内容与目录名不符」的快照按内部真实账号 id 改名归位
@@ -223,6 +275,13 @@ pub fn reconcile(ctx: &Ctx, sink: &dyn ProgressSink) -> Result<ReconcileReport, 
         } else {
             base.clone()
         };
+        // 保留槽（`last` / `last.bak`）不参与归位：它的目录名按设计就不等于账号 id
+        // （内容是「切换前现场」的滚动备份），用「名实是否相符」去判必然命中。而它的内容
+        // 几乎总是某个已登记账号的快照，于是会稳定走 skipped 分支——每次修复都刷两条假告警，
+        // 把真正的槽位冲突淹掉（2026-09-20 实测）。它照旧参与下面的白名单瘦身。
+        if snapshot::is_reserved_slot(&base) {
+            continue;
+        }
         let Some(actual) = uid::slot_account_id(ctx, &dir_name) else {
             skipped.push(format!("{dir_name}：解不出账号 id（可能是空目录或上游改了格式）"));
             continue;
@@ -249,8 +308,18 @@ pub fn reconcile(ctx: &Ctx, sink: &dyn ProgressSink) -> Result<ReconcileReport, 
     // 归位之后再清理：先保证每个目录都挂在正确的账号名下，再按白名单瘦身，
     // 这样清理报告里的槽位名与用户看到的一致
     let mut freed_bytes = 0u64;
+    let mut identities: Vec<SlotIdentity> = Vec::new();
     for slot in snapshot::list_slots(ctx) {
         freed_bytes += snapshot::prune_slot(ctx, &slot, sink).unwrap_or(0);
+        // 顺手解出展示信息：调用方要用它把账号库里「名字=uid」的记录回填成真实用户名，
+        // 让存量账号无需重新登录就能显示可读名称
+        if let Some(p) = uid::slot_profile(ctx, &slot) {
+            identities.push(SlotIdentity {
+                slot: slot.clone(),
+                username: p.username,
+                mobile: p.mobile,
+            });
+        }
     }
     for (_, actual) in &renamed {
         // 归位后的目标是主槽，已被上面遍历覆盖；这里只兜底其对应的回退代
@@ -263,8 +332,10 @@ pub fn reconcile(ctx: &Ctx, sink: &dyn ProgressSink) -> Result<ReconcileReport, 
     Ok(ReconcileReport {
         renamed,
         skipped,
-        slots: snapshot::list_slots(ctx),
+        // 用账号槽清单而不是全目录：调用方要拿它登记账号，混进保留槽会造出假账号
+        slots: snapshot::list_account_slots(ctx),
         freed_bytes,
+        identities,
     })
 }
 
@@ -278,6 +349,15 @@ pub fn switch_to(ctx: &Ctx, slot: &str, sink: &dyn ProgressSink) -> Result<usize
         .map_err(|_| "已有 TraeWork 操作进行中，请稍后再试".to_string())?;
 
     profile::ensure_slot_safe(slot)?;
+
+    // 保留槽不是账号槽：它的内容是「切换前现场」的滚动备份。不显式拦下的话，会掉进下面的
+    // 「名实相符」校验，报出「请先点修复槽位」——而修复本来就不该归位它，用户照做也修不好
+    // （2026-09-20 实测：账号库里曾被误登记出一条 last，点切换即陷入这个死循环）。
+    if snapshot::is_reserved_slot(slot) {
+        return Err(format!(
+            "{slot} 是「切换前现场」的保留备份槽，不是账号槽位，无法切换；请切换到具体账号"
+        ));
+    }
 
     // 预检放在关客户端之前：快照缺失是最常见的失败原因，此时不该动用户正在用的客户端
     let has_main = ctx.slot_dir(slot)?.exists();
@@ -371,5 +451,67 @@ pub(crate) mod test_support {
         std::fs::create_dir_all(&data).expect("创建临时数据目录");
         std::fs::create_dir_all(&profiles).expect("创建临时快照目录");
         Ctx::for_test(data, profiles)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{fake_ctx, QuietSink};
+    use super::*;
+
+    /// 在槽目录里造一份能解出 `uid` 的 storage.json（tc 密文格式，与真实客户端一致）
+    fn write_slot_storage(ctx: &Ctx, dir_name: &str, uid: &str) {
+        let plain = format!(r#"{{"userId":"{uid}","account":{{"username":"u{uid}"}}}}"#);
+        let enc = crate::tc_crypto::encrypt_storage_value(&plain).unwrap();
+        let dir = ctx
+            .profiles_dir
+            .join(dir_name)
+            .join("User")
+            .join("globalStorage");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("storage.json"),
+            format!(r#"{{"iCubeAuthInfo://icube.cloudide":"{enc}"}}"#),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn 修复只归位真错位槽且不把保留槽当账号() {
+        let ctx = fake_ctx("reconcile-reserved");
+        let sink = QuietSink;
+        write_slot_storage(&ctx, "168695880747001", "168695880747001");
+        // 保留槽 last：内容必然是「切换前的那个账号」，而该账号自己的主槽也存在——
+        // 这是每次切换后的恒定状态，绝不能被判成「错位」或登记成账号
+        write_slot_storage(&ctx, LAST_SLOT, "3031811986829834");
+        write_slot_storage(&ctx, "3031811986829834", "3031811986829834");
+        // 真错位：目录名与内容都不对（上一代备份里压的其实是另一个账号）
+        write_slot_storage(&ctx, "1111111111111111.bak", "2222222222222222");
+
+        let report = reconcile(&ctx, &sink).unwrap();
+
+        assert!(ctx.profiles_dir.join(LAST_SLOT).exists(), "保留槽不得被改名");
+        assert!(
+            !report.slots.iter().any(|s| s == LAST_SLOT),
+            "保留槽不得出现在账号槽清单里（调用方会拿它登记账号）"
+        );
+        assert_eq!(
+            report.renamed,
+            vec![(
+                "1111111111111111.bak".to_string(),
+                "2222222222222222".to_string()
+            )]
+        );
+        assert!(ctx.profiles_dir.join("2222222222222222").exists());
+        assert!(
+            report.skipped.is_empty(),
+            "保留槽造成的假告警必须消失：{:?}",
+            report.skipped
+        );
+        // 切到保留槽要给出明确原因，不能掉进「请先点修复槽位」的死循环。
+        // 与上面的断言同处一个用例：两者都经全局串行闸门，分开写会互相抢锁而随机失败
+        let err = switch_to(&ctx, LAST_SLOT, &QuietSink).unwrap_err();
+        assert!(err.contains("保留备份槽"), "{err}");
+        let _ = std::fs::remove_dir_all(&ctx.profiles_dir);
     }
 }

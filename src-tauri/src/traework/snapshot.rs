@@ -32,6 +32,13 @@ pub struct SlotStatus {
     pub bytes: u64,
     /// 主槽最后修改时间（Unix 秒）
     pub modified_at: Option<i64>,
+    /// 快照内凭据的到期时刻（access，RFC3339 原样；解不出为 None）
+    ///
+    /// 为什么由**命令层**填充而不是 `slot_status` 自己填：本模块只认文件系统，解析登录态
+    /// 内容属 `uid` 层；让两个平级原语互相依赖只为省一次文件读取并不划算（见 mod.rs 分层说明）
+    pub expired_at: Option<String>,
+    /// 快照内凭据的到期时刻（refresh）——**它才是「该槽位还能否免登录」的判据**
+    pub refresh_expired_at: Option<String>,
 }
 
 /// 递归求目录/文件体积（求值失败按 0 计——体积只用于展示，不该阻断任何流程）
@@ -273,6 +280,9 @@ pub fn slot_status(ctx: &Ctx, slot: &str) -> SlotStatus {
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64),
+        // 凭据时间由调用方按需填（见字段注释：解析登录态属 uid 层）
+        expired_at: None,
+        refresh_expired_at: None,
     }
 }
 
@@ -312,6 +322,18 @@ pub fn write_current_slot(ctx: &Ctx, slot: &str) -> Result<(), String> {
         .map_err(|e| format!("写入当前账号标记失败: {e}"))
 }
 
+/// 清除当前账号标记（删除账号时用）
+///
+/// 为什么必须清：标记指向一个已被删除的槽位时，面板会把「当前账号」一直显示成一个不存在的
+/// uid，而刷新/修复都无从纠正（它已经不是账号，只是残标记）
+pub fn clear_current_slot(ctx: &Ctx) -> Result<(), String> {
+    let file = ctx.current_account_file();
+    if file.exists() {
+        std::fs::remove_file(&file).map_err(|e| format!("清除当前账号标记失败: {e}"))?;
+    }
+    Ok(())
+}
+
 /// 枚举快照根目录下已有的槽位名（排除 `.bak`），用于发现「账号库里没有但快照还在」的孤儿槽
 pub fn list_slots(ctx: &Ctx) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(&ctx.profiles_dir) else {
@@ -325,6 +347,24 @@ pub fn list_slots(ctx: &Ctx) -> Vec<String> {
         .collect();
     slots.sort();
     slots
+}
+
+/// 目录名是否为保留槽（`last`：切换前现场的滚动备份）
+pub fn is_reserved_slot(name: &str) -> bool {
+    name == super::LAST_SLOT
+}
+
+/// 枚举**账号槽**：`list_slots` 去掉保留槽
+///
+/// 为什么要与 `list_slots` 分开：保留槽的目录名按设计就不等于账号 id（内容是「切换前现场」），
+/// 谁把它当账号用都会立刻出错——登记进账号库会造出一条「名字是别的账号、点切换必被拒绝」的
+/// 假账号；按「名实是否相符」去归位则会每次修复都刷假告警（2026-09-20 实测）。
+/// 保留槽仍要参与瘦身清理（它也是一份快照），所以不能在 `list_slots` 里直接剔除。
+pub fn list_account_slots(ctx: &Ctx) -> Vec<String> {
+    list_slots(ctx)
+        .into_iter()
+        .filter(|s| !is_reserved_slot(s))
+        .collect()
 }
 
 /// 枚举快照根下的**全部**目录（含 `.bak` 回退代），返回 `(目录名, 是否回退代)`
@@ -650,6 +690,12 @@ mod tests {
         // 空白文件 → None
         std::fs::write(ctx.current_account_file(), "  ").unwrap();
         assert_eq!(read_current_slot(&ctx), None);
+
+        // 删除账号时清除标记：清完必须读不到，且重复清空不报错（幂等）
+        write_current_slot(&ctx, "uid3").unwrap();
+        clear_current_slot(&ctx).unwrap();
+        assert_eq!(read_current_slot(&ctx), None);
+        clear_current_slot(&ctx).unwrap();
         let _ = std::fs::remove_dir_all(&ctx.profiles_dir);
     }
 
@@ -677,6 +723,19 @@ mod tests {
         std::fs::create_dir_all(ctx.profiles_dir.join("c")).unwrap();
         std::fs::write(ctx.profiles_dir.join("current_account.txt"), "a").unwrap();
         assert_eq!(list_slots(&ctx), vec!["a".to_string(), "c".to_string()]);
+        let _ = std::fs::remove_dir_all(&ctx.profiles_dir);
+    }
+
+    #[test]
+    fn 账号槽清单排除保留槽last() {
+        let ctx = fake_ctx("account-slots");
+        std::fs::create_dir_all(ctx.profiles_dir.join("a")).unwrap();
+        std::fs::create_dir_all(ctx.profiles_dir.join(crate::traework::LAST_SLOT)).unwrap();
+        std::fs::create_dir_all(ctx.profiles_dir.join("last.bak")).unwrap();
+        // 保留槽必须在 `list_slots` 里（瘦身清理要覆盖它），但绝不能进账号槽清单
+        assert!(list_slots(&ctx).contains(&crate::traework::LAST_SLOT.to_string()));
+        assert_eq!(list_account_slots(&ctx), vec!["a".to_string()]);
+        assert!(is_reserved_slot("last") && !is_reserved_slot("lastx"));
         let _ = std::fs::remove_dir_all(&ctx.profiles_dir);
     }
 }

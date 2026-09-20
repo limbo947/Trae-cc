@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, AccountBrief, AppSettings, CheckinResult, UsageSummary, UsageEventsResponse, UserStatisticData, TraeworkOverview, TraeworkUidEvidence, TraeworkActionResult, TraeworkReconcile } from "./types";
+import type { Account, AccountBrief, AppPaths, AppSettings, CheckinResult, RuntimeStatus, UpdateInfo, UsageSummary, UsageEventsResponse, UserStatisticData, TraeworkOverview, TraeworkUidEvidence, TraeworkActionResult, TraeworkReconcile, TraeIdeReadOutcome } from "./types";
 
 function checkNetwork() {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -10,11 +10,6 @@ function checkNetwork() {
 async function invokeNetwork<T>(cmd: string, args?: any): Promise<T> {
   checkNetwork();
   return invoke(cmd, args);
-}
-
-// 添加账号（通过 Cookies）
-export async function addAccount(cookies: string): Promise<Account> {
-  return invokeNetwork("add_account", { cookies });
 }
 
 // 添加账号（通过 Token，可选 Cookies）
@@ -118,11 +113,6 @@ export async function updateAccountProfile(
   });
 }
 
-// 更新 Cookies
-export async function updateCookies(accountId: string, cookies: string): Promise<void> {
-  return invokeNetwork("update_cookies", { accountId, cookies });
-}
-
 // 导出账号
 export async function exportAccounts(): Promise<string> {
   return invoke("export_accounts");
@@ -167,7 +157,8 @@ export async function getUsageEvents(
 }
 
 // 从 Trae IDE 读取当前登录账号
-export async function readTraeAccount(): Promise<Account | null> {
+// 返回状态而非可空账号：null 无法区分「本机没登录」与「账号已在列表中」
+export async function readTraeAccount(): Promise<TraeIdeReadOutcome> {
   return invoke("read_trae_account");
 }
 
@@ -283,6 +274,31 @@ export async function getLogFilePath(): Promise<string> {
   return invoke("get_log_file_path_cmd");
 }
 
+// 获取应用数据路径（账号库 / 设置 / 日志 / TraeWork 快照）
+// 纯本地读路径，不走联网检查——断网时设置页的数据分组仍应可见
+export async function getAppPaths(): Promise<AppPaths> {
+  return invoke("get_app_paths");
+}
+
+// ============ 运行时状态 ============
+
+// 进程状态（设置页状态面板）。纯本地系统调用，不走联网检查。
+export async function getRuntimeStatus(): Promise<RuntimeStatus> {
+  return invoke("get_runtime_status");
+}
+
+// ============ 更新 ============
+
+// 检查更新（返回 null 表示已是最新）
+export async function checkUpdate(): Promise<UpdateInfo | null> {
+  return invokeNetwork("check_update");
+}
+
+// 下载并安装更新（成功后由 updater 重启应用）
+export async function installUpdate(): Promise<void> {
+  return invokeNetwork("install_update");
+}
+
 // ============ TraeWork（TRAE SOLO CN）API ============
 //
 // TraeWork 走「登录态快照 / 恢复」，与 TraeCode 的切换机制完全不同，命令彼此独立。
@@ -314,6 +330,12 @@ export async function traeworkSwitchAccount(accountId: string): Promise<Traework
 // 删除某账号的快照，返回释放的字节数
 export async function traeworkDeleteSnapshot(accountId: string): Promise<number> {
   return invoke("traework_delete_snapshot", { accountId });
+}
+
+// 移除 TraeWork 账号：删账号记录并一并删掉磁盘快照（与「删除快照」不同，后者只删文件、
+// 账号仍留在列表里变成「无快照」条目，而 TraeWork 账号在账号管理页不可见、没有别的删除入口）
+export async function traeworkRemoveAccount(accountId: string): Promise<TraeworkActionResult> {
+  return invoke("traework_remove_account", { accountId });
 }
 
 // 设置 TraeWork 可执行文件路径

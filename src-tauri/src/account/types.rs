@@ -202,6 +202,46 @@ fn uuid_simple() -> String {
     format!("{:x}{:x}", duration.as_secs(), duration.subsec_nanos())
 }
 
+/// 「从 Trae IDE 读取账号」的结果状态
+///
+/// 为什么显式建模而不是继续用 `Option<Account>`：`None` 同时代表「本机没有登录态」与
+/// 「该账号已在列表中」这两种完全不同的情形，前端只能兜底成「未找到登录账号或账号已存在」，
+/// 用户既不知道发生了什么、也不知道下一步该做什么（2026-09-20 的实际报障即由此而来）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraeIdeReadStatus {
+    /// 新账号，已加入账号库
+    Added,
+    /// 账号已存在，但用 IDE 里的信息补齐了缺失字段
+    Updated,
+    /// 账号已存在且没有可补的字段（未做任何改动）
+    Exists,
+    /// 本机没有可读的 IDE 登录态
+    NoLogin,
+}
+
+/// 「从 Trae IDE 读取账号」的结果
+///
+/// `message` 由后端统一撰写（中文），前后端共用同一份文案，避免两处各写一遍导致口径漂移。
+#[derive(Debug, Clone, Serialize)]
+pub struct TraeIdeReadOutcome {
+    pub status: TraeIdeReadStatus,
+    /// 涉及到的账号（Added/Updated/Exists 时给出，便于前端直接刷新列表项）
+    pub account: Option<Account>,
+    pub message: String,
+}
+
+impl TraeIdeReadOutcome {
+    /// 只有一个状态与说明、不涉及具体账号的结果（NoLogin）
+    pub fn no_login(message: impl Into<String>) -> Self {
+        Self {
+            status: TraeIdeReadStatus::NoLogin,
+            account: None,
+            message: message.into(),
+        }
+    }
+}
+
 /// 账号简要信息（用于列表展示）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountBrief {

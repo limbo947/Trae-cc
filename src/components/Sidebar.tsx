@@ -4,6 +4,9 @@ import { ThemeSwitcher } from "./ThemeSwitcher";
 interface SidebarProps {
   currentPage: string;
   onNavigate: (page: string) => void;
+  /** 主题来自 settings.json，见 `ThemeSwitcher` 的说明 */
+  theme?: string | null;
+  onThemeChange?: (theme: "light" | "dark") => void;
 }
 
 // 16px 线性图标（stroke=currentColor），风格对齐 TraeCode 图标语言
@@ -62,7 +65,7 @@ const menuItems = [
   { id: "about", label: "关于" },
 ];
 
-export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
+export function Sidebar({ currentPage, onNavigate, theme, onThemeChange }: SidebarProps) {
   return (
     <aside className="sidebar">
       <nav className="sidebar-nav">
@@ -79,7 +82,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       </nav>
 
       <div className="sidebar-footer">
-        <ThemeSwitcher />
+        <ThemeSwitcher theme={theme} onThemeChange={onThemeChange} />
       </div>
     </aside>
   );

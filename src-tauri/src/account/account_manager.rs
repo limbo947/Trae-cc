@@ -42,8 +42,26 @@ impl AccountManager {
         Ok(manager)
     }
 
-    /// 获取数据存储路径
-    fn get_data_path() -> Result<PathBuf> {
+    /// 按 `user_id` 在 **traecode** 账号中查找下标
+    ///
+    /// 为什么查询必须带 app 条件：`Account.user_id` 对 traecode 存的是 API 返回的用户 id、
+    /// 对 TraeWork 存的是快照 uid，而**两者值域相同**（都是同一个 Trae userId），因此同一个账号
+    /// 在两个应用下各有一条记录——`user_id` 相同、`app` 不同，这是设计而非重复数据。
+    /// 不限定 app 的去重会把 TraeWork 记录误当成 TraeCode 账号，表现为两类事故：
+    /// ① 账号管理页看不到该账号却报「已在列表中」（2026-09-20 实测报障）；
+    /// ② 把 TraeCode 的 cookies/JWT 写进 TraeWork 记录，让一条记录同时承载两套凭据。
+    fn traecode_index_by_user_id(&self, user_id: &str) -> Option<usize> {
+        self.store
+            .accounts
+            .iter()
+            .position(|a| a.is_traecode() && a.user_id == user_id)
+    }
+
+    /// 获取账号库文件路径（`accounts.json`）
+    ///
+    /// 为什么公开：设置页「数据与备份」要把这个路径展示给用户并在资源管理器中定位，
+    /// 由后端统一给出可以避免前端自己拼 `%APPDATA%\hhj\trae-cc\data` 而拼错大小写。
+    pub fn get_data_path() -> Result<PathBuf> {
         let proj_dirs = directories::ProjectDirs::from("com", "hhj", "trae-cc")
             .ok_or_else(|| anyhow!("无法获取应用数据目录"))?;
 
@@ -155,11 +173,8 @@ impl AccountManager {
         let user_info = client.get_user_info().await?;
 
         // 检查是否已存在
-        let existing_index = self
-            .store
-            .accounts
-            .iter()
-            .position(|a| a.user_id == token_result.user_id);
+        // 只在 traecode 账号中比对：TraeWork 记录可能持有同一个 user_id（见 traecode_index_by_user_id）
+        let existing_index = self.traecode_index_by_user_id(&token_result.user_id);
         
         if let Some(index) = existing_index {
             // 账号已存在，更新信息
@@ -231,11 +246,8 @@ impl AccountManager {
         let user_info = client.get_user_info_by_token().await?;
 
         // 检查是否已存在
-        let existing_index = self
-            .store
-            .accounts
-            .iter()
-            .position(|a| a.user_id == user_info.user_id);
+        // 只在 traecode 账号中比对（同上）
+        let existing_index = self.traecode_index_by_user_id(&user_info.user_id);
         
         if let Some(index) = existing_index {
             // 账号已存在，更新信息
@@ -349,11 +361,8 @@ impl AccountManager {
         let user_info = client.get_user_info_by_token().await?;
 
         if let Some(existing_id) = self
-            .store
-            .accounts
-            .iter()
-            .find(|a| a.user_id == user_info.user_id)
-            .map(|a| a.id.clone())
+            .traecode_index_by_user_id(&user_info.user_id)
+            .map(|i| self.store.accounts[i].id.clone())
         {
             // 先准备刷新账号信息（优先使用 cookies）
             let (name, email, avatar_url, region, tenant_id) = if let Some(ref cookies_str) = cookies {
@@ -435,11 +444,7 @@ impl AccountManager {
         let login_result = login_with_email(&email, &password).await?;
 
         // 检查是否已存在
-        let existing_index = self
-            .store
-            .accounts
-            .iter()
-            .position(|a| a.user_id == login_result.user_id);
+        let existing_index = self.traecode_index_by_user_id(&login_result.user_id);
         
         if let Some(index) = existing_index {
             // 账号已存在，更新信息
@@ -1112,8 +1117,8 @@ impl AccountManager {
         
         for task in tasks {
             if let Ok(Some((login_result, email, password))) = task.await {
-                // 检查是否已存在（再次检查，避免并发重复）
-                if self.store.accounts.iter().any(|a| a.user_id == login_result.user_id) {
+                // 检查是否已存在（再次检查，避免并发重复）；同样只比对 traecode 账号
+                if self.traecode_index_by_user_id(&login_result.user_id).is_some() {
                     println!("[AccountManager] 账号已存在（user_id 重复）: {}", email);
                     continue;
                 }
@@ -1250,7 +1255,9 @@ impl AccountManager {
     }
 
     /// 从 Trae IDE 读取当前登录账号
-    pub async fn read_trae_ide_account(&mut self) -> Result<Option<Account>> {
+    ///
+    /// 返回值区分「新增 / 补全 / 已存在 / 本机无登录态」四种结果，交由前端给出准确提示。
+    pub async fn read_trae_ide_account(&mut self) -> Result<TraeIdeReadOutcome> {
         // 获取 Trae IDE 配置文件路径（跨平台支持，仅适配国内版 Trae CN）
         #[cfg(target_os = "windows")]
         let trae_data_path = {
@@ -1281,26 +1288,53 @@ impl AccountManager {
 
         // 检查文件是否存在
         if !storage_path.exists() {
-            return Ok(None);
+            // 文件不存在是「客户端还没启动过」的正常状态，不是失败：走 NoLogin 让前端提示怎么做，
+            // 而不是抛 Err（Err 会弹红框，用户会以为工具坏了）
+            return Ok(TraeIdeReadOutcome::no_login(format!(
+                "未找到 Trae IDE 配置文件（{}），请先启动一次 Trae 并登录",
+                storage_path.display()
+            )));
         }
 
         // 读取文件内容
         let content = fs::read_to_string(&storage_path)
             .map_err(|e| anyhow!("读取 Trae IDE 配置文件失败: {}", e))?;
 
-        // 解析 JSON
-        let storage: serde_json::Value = serde_json::from_str(&content)
+        // 解析 JSON（剥离 BOM：客户端写文件时可能带 UTF-8 BOM，serde 会直接判定为非法 JSON）
+        let storage: serde_json::Value = serde_json::from_str(content.trim_start_matches('\u{feff}'))
             .map_err(|e| anyhow!("解析 Trae IDE 配置文件失败: {}", e))?;
 
-        // 获取 iCubeAuthInfo 字段
-        let auth_info_str = storage
+        // 获取 iCubeAuthInfo 字段：缺失即「本机 Trae 未登录」，与文件不存在同属可预期的状态
+        let Some(auth_info_raw) = storage
             .get("iCubeAuthInfo://icube.cloudide")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("未找到 Trae IDE 登录信息"))?;
+        else {
+            return Ok(TraeIdeReadOutcome::no_login(format!(
+                "Trae IDE 当前未登录（{} 中没有登录信息），请在 Trae 客户端登录后重试",
+                storage_path.display()
+            )));
+        };
 
-        // 解析嵌套的 JSON 字符串
-        let auth_info: serde_json::Value = serde_json::from_str(auth_info_str)
-            .map_err(|e| anyhow!("解析 Trae IDE 认证信息失败: {}", e))?;
+        // 解析登录态：新版 Trae CN（≥2.3）把该键从明文 JSON 改成 tc 密文（base64），直接当 JSON 解析
+        // 只会得到 "expected value at line 1 column 1"。故先按明文解析（兼容旧客户端），失败再走 tc
+        // 解密。判据与 traework::uid::profile_from_storage 保持一致——两条读取路径对同一份文件必须得出
+        // 相同结论，否则会出现"识别到的账号"与"实际登录账号"名实不符。
+        let auth_info: serde_json::Value = match serde_json::from_str(
+            auth_info_raw.trim_start_matches('\u{feff}'),
+        ) {
+            Ok(v) => v,
+            Err(plain_err) => match crate::tc_crypto::decrypt_storage_value(auth_info_raw) {
+                Ok(plain) => serde_json::from_str(plain.trim_start_matches('\u{feff}'))
+                    .map_err(|e| anyhow!("解析 Trae IDE 认证信息失败: {}", e))?,
+                Err(decrypt_err) => {
+                    return Err(anyhow!(
+                        "解析 Trae IDE 认证信息失败: {}（按 tc 密文解密亦失败: {}，请先启动 Trae 并确认已登录）",
+                        plain_err,
+                        decrypt_err
+                    ))
+                }
+            },
+        };
 
         // 提取账号信息
         let token = auth_info
@@ -1309,11 +1343,15 @@ impl AccountManager {
             .ok_or_else(|| anyhow!("未找到 Token"))?
             .to_string();
 
-        let user_id = auth_info
-            .get("userId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("未找到 User ID"))?
-            .to_string();
+        // userId 在部分客户端版本里是数字而非字符串，两种都接受（与 traework::uid::profile_of 同口径）
+        let user_id = match auth_info.get("userId") {
+            Some(serde_json::Value::String(s)) => s.trim().to_string(),
+            Some(serde_json::Value::Number(n)) => n.to_string(),
+            _ => return Err(anyhow!("未找到 User ID")),
+        };
+        if user_id.is_empty() {
+            return Err(anyhow!("未找到 User ID"));
+        }
 
         let email = auth_info
             .get("account")
@@ -1336,10 +1374,64 @@ impl AccountManager {
             .unwrap_or("")
             .to_string();
 
-        // 检查账号是否已存在
-        if self.store.accounts.iter().any(|a| a.user_id == user_id) {
-            println!("[INFO] Trae IDE 账号已存在于账号管理中");
-            return Ok(None);
+        // 账号已存在：不重复添加，改为把 IDE 里更新的字段补进既有记录。
+        // 为什么补而不是直接拒绝：实测（2026-09-20）账号库里那条记录只有 user_id，
+        // 名字为空且没有 Token——这种「已存在」对用户毫无意义，他点这个按钮就是想让它可用。
+        // 这里只用 login 密文里已有的字段（用户名/邮箱/头像/Token），不发网络请求，保证「已存在」是零成本的快路径。
+        if let Some(index) = self.traecode_index_by_user_id(&user_id) {
+            let ide_expired_at = auth_info
+                .get("expiredAt")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let existing = &mut self.store.accounts[index];
+            let mut filled: Vec<&str> = Vec::new();
+
+            // Token 仅在本地不可用时回填：IDE 里的 Token 未必比本地新（IDE 可能久未启动），
+            // 无条件覆盖会把已刷新出来的有效 Token 打回旧值
+            if !token_still_usable(existing) {
+                existing.jwt_token = Some(token.clone());
+                existing.token_expired_at = ide_expired_at;
+                filled.push("登录 Token");
+            }
+            if existing.name.trim().is_empty() && !username.trim().is_empty() {
+                existing.name = username.clone();
+                filled.push("用户名");
+            }
+            if existing.email.trim().is_empty() && !email.trim().is_empty() {
+                existing.email = email.clone();
+                filled.push("邮箱");
+            }
+            if existing.avatar_url.trim().is_empty() && !avatar_url.trim().is_empty() {
+                existing.avatar_url = avatar_url.clone();
+                filled.push("头像");
+            }
+
+            let existing = existing.clone();
+            let display = format!("{}（{}）", display_name_of(&existing), user_id);
+
+            if filled.is_empty() {
+                println!("[INFO] Trae IDE 账号已存在于账号管理中: {}", user_id);
+                return Ok(TraeIdeReadOutcome {
+                    status: TraeIdeReadStatus::Exists,
+                    account: Some(existing),
+                    message: format!("该账号已在列表中：{display}，未重复添加"),
+                });
+            }
+
+            self.save_store()?;
+            println!(
+                "[INFO] 已用 Trae IDE 登录态补全账号 {}: {}",
+                user_id,
+                filled.join("、")
+            );
+            return Ok(TraeIdeReadOutcome {
+                status: TraeIdeReadStatus::Updated,
+                account: Some(existing),
+                message: format!(
+                    "该账号已在列表中，已补全{}：{display}",
+                    filled.join("、")
+                ),
+            });
         }
 
         // 使用 Token 获取完整的用户信息（带超时）
@@ -1388,7 +1480,13 @@ impl AccountManager {
         self.save_store()?;
 
         println!("[INFO] 成功从 Trae IDE 读取并添加账号: {}", account.email);
-        Ok(Some(account))
+
+        let display = format!("{}（{}）", display_name_of(&account), account.user_id);
+        Ok(TraeIdeReadOutcome {
+            status: TraeIdeReadStatus::Added,
+            account: Some(account),
+            message: format!("已从 Trae IDE 读取并添加账号：{display}"),
+        })
     }
 
     /// 领取生日礼包
@@ -1557,5 +1655,77 @@ impl AccountManager {
             self.save_store()?;
         }
         Ok(())
+    }
+}
+
+/// 本地 Token 是否仍可用（非空，且未过期）
+///
+/// 与 `switch_account` 的过期判断同口径：`token_expired_at` 缺失视为可用，解析失败视为不可用。
+/// 这里只需要一个保守答案——不确定时宁可让 IDE 的 Token 覆盖，也不要抱着一个身份不明的 Token 不放。
+fn token_still_usable(account: &Account) -> bool {
+    if account
+        .jwt_token
+        .as_deref()
+        .map_or(true, |t| t.trim().is_empty())
+    {
+        return false;
+    }
+    match account.token_expired_at.as_deref() {
+        None => true,
+        Some(s) => chrono::DateTime::parse_from_rfc3339(s)
+            .map(|dt| dt.with_timezone(&chrono::Utc) > chrono::Utc::now())
+            .unwrap_or(false),
+    }
+}
+
+/// 账号展示名：名字为空时兜到 user_id（界面不该出现无名条目）
+fn display_name_of(account: &Account) -> String {
+    let name = account.name.trim();
+    if name.is_empty() {
+        account.user_id.clone()
+    } else {
+        name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 造一个只含给定账号的 manager（不落盘、不读真实数据目录）
+    fn manager_with(accounts: Vec<Account>) -> AccountManager {
+        AccountManager {
+            store: AccountStore {
+                accounts,
+                ..Default::default()
+            },
+            data_path: PathBuf::from("unused-accounts.json"),
+        }
+    }
+
+    /// 同 user_id 的 TraeWork 记录绝不能被当成 TraeCode 账号
+    ///
+    /// 复刻 2026-09-20 的实测报障：Trae 账号 `1699216069236448` 只有一条 **traework** 记录，
+    /// 账号管理页（只渲染非 traework）看不到它，但按 user_id 去重会把这条 traework 记录当作
+    /// 「TraeCode 账号已存在」，于是「读取本地账号」永远只提示已存在、什么也不做。
+    #[test]
+    fn traecode查找跳过同user_id的traework记录() {
+        let manager = manager_with(vec![
+            Account::new_traework("1699216069236448".to_string(), "用户3036504228".to_string()),
+        ]);
+        assert_eq!(manager.traecode_index_by_user_id("1699216069236448"), None);
+
+        // 同一账号在两个应用各有一条时，只应命中 traecode 那条
+        let manager = manager_with(vec![
+            Account::new_traework("168695880747001".to_string(), "似我".to_string()),
+            Account::new(
+                "似我".to_string(),
+                String::new(),
+                String::new(),
+                "168695880747001".to_string(),
+                String::new(),
+            ),
+        ]);
+        assert_eq!(manager.traecode_index_by_user_id("168695880747001"), Some(1));
     }
 }

@@ -71,6 +71,9 @@ export function AccountListItem({ account, usage, selected, checkedInToday, onSe
 
   const isTokenExpired = false; // TODO: 根据实际 token 过期时间判断
 
+  // 额度耗尽信号：只有拿到用量后才判断（usage 为 null 时判断会误报）
+  const quotaExhausted = hasUsage && totalLeft <= 0;
+
   return (
     <div
       className={`account-list-item ${selected ? "selected" : ""}`}
@@ -142,7 +145,10 @@ export function AccountListItem({ account, usage, selected, checkedInToday, onSe
                 style={{ width: `${Math.min(usagePercent, 100)}%`, background: getUsageColor() }}
               />
             </div>
-            <div className={`dollar-left ${totalLeft < 0 ? 'negative' : ''}`}>
+            <div
+              className={`dollar-left ${totalLeft <= 0 ? 'negative' : ''}`}
+              title={quotaExhausted ? "额度已用尽：可升级专业版，或改用其他账号" : undefined}
+            >
               {totalLeft < 0 ? '超支' : '剩'} ${Math.abs(totalLeft).toFixed(2)}
             </div>
           </div>
@@ -153,7 +159,12 @@ export function AccountListItem({ account, usage, selected, checkedInToday, onSe
               <span className="usage-text">
                 <strong>{hasUsage ? Math.round(totalUsed) : "-"}</strong> / {hasUsage ? totalLimit : "-"}
               </span>
-              <span className="usage-left">剩余 {hasUsage ? Math.round(totalLeft) : "-"}</span>
+              <span
+                className={`usage-left${quotaExhausted ? " exhausted" : ""}`}
+                title={quotaExhausted ? "额度已用尽：可升级专业版，或改用其他账号" : undefined}
+              >
+                {quotaExhausted ? "额度已用尽" : `剩余 ${hasUsage ? Math.round(totalLeft) : "-"}`}
+              </span>
             </div>
             <div className="usage-bar-mini">
               <div
