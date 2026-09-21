@@ -272,6 +272,11 @@ export interface AppSettings {
    * null 表示从未设置过（老版本只存 localStorage），前端据此决定是否迁移。
    */
   theme: string | null;
+  /**
+   * TraeCode 账号页视图偏好：`grid`（卡片）/ `list`（列表）。
+   * null 表示从未设置过（老配置），前端回落为 `grid`。
+   */
+  view_mode: string | null;
 }
 
 /**

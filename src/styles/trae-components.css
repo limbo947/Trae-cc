@@ -343,25 +343,6 @@
   box-shadow: none;
 }
 
-.toolbar-search {
-  width: 220px;
-  height: 32px;
-  padding: 0 10px;
-  background: var(--bg-inset);
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-4);
-}
-
-.toolbar-search:focus-within {
-  border-color: var(--bg-brand);
-  box-shadow: 0 0 0 2px var(--accent-glow);
-}
-
-.toolbar-search-input {
-  font-size: 12px;
-  font-weight: 400;
-}
-
 .quota-filter-select,
 .setting-select {
   height: 32px;
@@ -514,6 +495,12 @@
   color: var(--status-error-default);
 }
 
+/* 状态徽标的警示档：「能用但需关注」（如 TraeWork 凭据临近失效、积分查询失败） */
+.card-status.warn {
+  background: var(--status-warning-surface-l1);
+  color: var(--status-warning-default);
+}
+
 .tag {
   padding: 2px 8px;
   border-radius: var(--radius-2);
@@ -589,6 +576,9 @@
   font-size: 12px;
 }
 
+/* 轨道（灰）= 已消耗、填充（绿）= 剩余：条要回答「还能用多少」，
+   「用了多少」交给旁边的百分比/数值文字。故不再按使用率切红/黄/绿，
+   通用 / Work / 赠送三类子条也不各自配色 */
 .usage-bar,
 .compact-bar,
 .usage-bar-mini {
@@ -600,30 +590,12 @@
 .usage-bar-fill,
 .compact-bar-fill {
   border-radius: var(--radius-2);
-}
-
-.usage-bar-fill.low {
   background: var(--status-success-default);
 }
 
-.usage-bar-fill.medium {
-  background: var(--status-warning-default);
-}
-
-.usage-bar-fill.high {
-  background: var(--status-error-default);
-}
-
-.compact-bar-fill.basic {
-  background: var(--bg-brand);
-}
-
-.compact-bar-fill.bonus {
+/* 列表视图迷你条：圆角沿用 App.css 的定义，这里只统一填充色 */
+.usage-bar-fill-mini {
   background: var(--status-success-default);
-}
-
-.compact-bar-fill.work {
-  background: var(--status-warning-default);
 }
 
 .usage-numbers,

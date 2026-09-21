@@ -15,30 +15,51 @@ interface StatusSectionProps {
  *
  * 账号部分直接读 `getAccounts` 而不是走后端聚合：`AccountBrief` 里已经有
  * `is_current` 与 `checked_in_today`（且签到日期由后端按本地时区判定，前端不重算）。
+ * 展示按应用分两行：TraeCode 的「当前账号」取 `is_current`，TraeWork 的取
+ * `traeworkOverview().current_slot`（current_account.txt 才是它的真源，见 §5.9）。
  */
 export function StatusSection({ onToast }: StatusSectionProps) {
   const [traeRunning, setTraeRunning] = useState<boolean | null>(null);
   const [traeworkRunning, setTraeworkRunning] = useState<boolean | null>(null);
-  const [currentAccount, setCurrentAccount] = useState<string | null>(null);
-  const [checkin, setCheckin] = useState<{ done: number; total: number } | null>(null);
+  const [tcAccount, setTcAccount] = useState<string | null>(null);
+  const [tcCheckin, setTcCheckin] = useState<{ done: number; total: number } | null>(null);
+  const [twAccount, setTwAccount] = useState<string | null>(null);
+  const [twCheckin, setTwCheckin] = useState<{ done: number; total: number } | null>(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [status, accounts] = await Promise.all([
+      const [status, accounts, overview] = await Promise.all([
         api.getRuntimeStatus(),
         api.getAccounts().catch(() => [] as AccountBrief[]),
+        // TraeWork 概览失败（如未配置安装路径）只影响「当前账号」一格，不应拖垮整面板
+        api.traeworkOverview().catch(() => null),
       ]);
       setTraeRunning(status.trae_running);
       setTraeworkRunning(status.traework_running);
 
       const traecode = accounts.filter((a) => a.app !== "traework");
       const current = traecode.find((a) => a.is_current);
-      setCurrentAccount(current ? (current.email || current.name) : null);
-      setCheckin({
+      setTcAccount(current ? (current.email || current.name) : null);
+      setTcCheckin({
         done: traecode.filter((a) => a.checked_in_today).length,
         total: traecode.length,
+      });
+
+      const traework = accounts.filter((a) => a.app === "traework");
+      // TraeWork 的「当前账号」真源是 current_account.txt（槽位 = uid），不是 is_current；
+      // 映射回账号名显示，匹配不到时退回原始 uid，与 TraeWork 面板口径一致
+      const slot = overview?.current_slot ?? null;
+      if (!slot) {
+        setTwAccount(null);
+      } else {
+        const matched = traework.find((a) => (a.uid ?? a.name) === slot);
+        setTwAccount(matched ? (matched.name || matched.email || slot) : slot);
+      }
+      setTwCheckin({
+        done: traework.filter((a) => a.checked_in_today).length,
+        total: traework.length,
       });
     } catch (err: any) {
       // 进程状态取不到不影响本页其他功能，降级为「未知」而不是让整页报错
@@ -63,20 +84,35 @@ export function StatusSection({ onToast }: StatusSectionProps) {
           <div className="setting-desc" style={{ marginTop: '4px' }}>
             清除登录状态前请先退出 Trae IDE；保存或切换 TraeWork 快照时会自动关闭对应客户端。
           </div>
-          <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-            <StatusChip label="Trae IDE" value={traeRunning} />
-            <StatusChip label="TraeWork" value={traeworkRunning} />
-            <PlainChip
-              label="当前账号"
-              value={currentAccount ?? "未设置"}
-              tone={currentAccount ? "normal" : "muted"}
-            />
-            <PlainChip
-              label="今日签到"
-              value={checkin ? `${checkin.done} / ${checkin.total}` : "—"}
-              tone={checkin && checkin.total > 0 && checkin.done === checkin.total ? "ok" : "muted"}
-            />
-
+          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div className="status-group-row">
+              <span className="status-group-label">TraeWork</span>
+              <StatusChip label="状态" value={traeworkRunning} />
+              <PlainChip
+                label="当前账号"
+                value={twAccount ?? "未设置"}
+                tone={twAccount ? "normal" : "muted"}
+              />
+              <PlainChip
+                label="今日签到"
+                value={twCheckin ? `${twCheckin.done} / ${twCheckin.total}` : "—"}
+                tone={twCheckin && twCheckin.total > 0 && twCheckin.done === twCheckin.total ? "ok" : "muted"}
+              />
+            </div>
+            <div className="status-group-row">
+              <span className="status-group-label">TraeCode</span>
+              <StatusChip label="状态" value={traeRunning} />
+              <PlainChip
+                label="当前账号"
+                value={tcAccount ?? "未设置"}
+                tone={tcAccount ? "normal" : "muted"}
+              />
+              <PlainChip
+                label="今日签到"
+                value={tcCheckin ? `${tcCheckin.done} / ${tcCheckin.total}` : "—"}
+                tone={tcCheckin && tcCheckin.total > 0 && tcCheckin.done === tcCheckin.total ? "ok" : "muted"}
+              />
+            </div>
           </div>
         </div>
         <div className="setting-action" style={{ paddingTop: '24px', marginLeft: '16px' }}>

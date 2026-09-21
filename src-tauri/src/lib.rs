@@ -11,6 +11,7 @@ mod browser_auto_login;
 mod logger;
 mod tc_crypto;
 mod traework;
+mod window_state;
 
 use std::collections::HashMap;
 use std::fs;
@@ -61,6 +62,14 @@ pub struct AppSettings {
     /// 若这里给默认值，前端就分不清「用户从未在本字段设置过」与「用户显式选了 dark」，
     /// 迁移时会把老用户的 light 偏好悄悄覆盖成 dark。
     pub theme: Option<String>,
+    /// TraeCode 账号页的视图偏好：`grid`（卡片）/ `list`（列表）。
+    ///
+    /// 为什么放进 settings.json 而不是继续用 localStorage：主题的历史教训是
+    /// 「浏览器存储 + settings.json 两套真源」会让导出配置不完整、并在无关保存时互相覆盖
+    /// （见 `ThemeSwitcher`）。视图偏好同属界面状态，跟随同一真源才不会重蹈覆辙。
+    ///
+    /// `None` 表示从未设置过（老配置），由前端回落为 `grid`。
+    pub view_mode: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -73,6 +82,7 @@ impl Default for AppSettings {
             auto_start_enabled: false,
             auto_checkin_enabled: true,
             theme: None,
+            view_mode: None,
         }
     }
 }
@@ -770,6 +780,61 @@ fn collect_trae_cookies(webview: &WebviewWindow, extra_url: Option<&str>) -> Str
     }
     cookies
 }
+
+/// 打开登录窗口前清掉上一轮登录留下的 web 会话（登录窗口的轻量隔离）
+///
+/// 为什么必须**先清后导航**：登录窗口与购买窗口共用 WebView2 的默认数据目录
+/// （`%LOCALAPPDATA%\com.hhj.trae-cc\EBWebView`），上一次登录在里面留下的 `trae.com.cn`
+/// Cookie 会被登录页的**首次请求**原样带上去，表现为「打开登录窗口时还带着上次那个账号」。
+/// 原实现在窗口已经开始加载之后才调用清理，那一次请求早已把旧 Cookie 发出去了——清理一直
+/// 都在，只是晚了一步。
+///
+/// 为什么用 `about:blank` 起手：`clear_all_browsing_data` 只能作用于已建好的 webview，
+/// 建窗时直接给登录 URL 的话，清理必然晚于首次请求。
+///
+/// 为什么在整库清理之外再按域删一遍 Cookie：`ClearBrowsingData` 是异步落盘的，显式删除
+/// 覆盖它尚未生效的窗口期。只删 trae 域而非全量——购买窗口 `open_pricing` 有意走
+/// 「清 Cookie → 写入目标账号 Cookie → 跳转」，两个窗口又共用数据目录，全量清理会顺带
+/// 抹掉用户在购买窗口里的其它站点状态。
+fn clear_login_webview_session(webview: &WebviewWindow) {
+    if let Err(e) = webview.clear_all_browsing_data() {
+        log::warn!("清理登录窗口浏览数据失败: {e}");
+    }
+
+    let cookies = match webview.cookies() {
+        Ok(cookies) => cookies,
+        Err(e) => {
+            log::warn!("读取登录窗口 Cookie 失败，跳过按域清理: {e}");
+            return;
+        }
+    };
+
+    // 域名判据同时覆盖 `trae.com.cn` 与 `trae.cn`（签到/API 在后者），容忍前导点与子域
+    let is_trae = |domain: Option<&str>| {
+        domain
+            .map(|d| d.trim_start_matches('.').to_lowercase())
+            .is_some_and(|d| {
+                d == "trae.com.cn"
+                    || d.ends_with(".trae.com.cn")
+                    || d == "trae.cn"
+                    || d.ends_with(".trae.cn")
+            })
+    };
+
+    let mut removed = 0usize;
+    for cookie in cookies {
+        if !is_trae(cookie.domain()) {
+            continue;
+        }
+        match webview.delete_cookie(cookie) {
+            Ok(()) => removed += 1,
+            // 只记数量不记内容：Cookie 是凭据，禁止落日志
+            Err(e) => log::warn!("删除登录窗口残留 Cookie 失败: {e}"),
+        }
+    }
+    log::info!("登录窗口已清理浏览数据，并显式删除 {removed} 条 trae 域 Cookie");
+}
+
 #[tauri::command]
 async fn start_browser_login(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
     let mut browser_login = state.browser_login.lock().await;
@@ -846,12 +911,23 @@ async fn start_browser_login(app: AppHandle, state: State<'_, AppState>) -> Resu
         return Err(anyhow::anyhow!("无法关闭已存在的登录窗口，请重启应用后重试").into());
     }
 
-    let webview = WebviewWindowBuilder::new(&app, "trae-login", WebviewUrl::External("https://www.trae.com.cn/login".parse().unwrap()))
+    // 先用 about:blank 建窗、清掉残留会话，再导航到登录页——这个顺序就是本步骤的全部意义，
+    // 原因见 clear_login_webview_session
+    let webview = WebviewWindowBuilder::new(&app, "trae-login", WebviewUrl::External("about:blank".parse().unwrap()))
         .title("Trae CN 登录")
         .inner_size(1000.0, 720.0)
         .initialization_script(&script_init)
         .build()
         .map_err(|e| anyhow::anyhow!("无法打开登录窗口: {}", e))?;
+
+    clear_login_webview_session(&webview);
+
+    webview
+        .navigate(
+            Url::parse("https://www.trae.com.cn/login")
+                .map_err(|e| anyhow::anyhow!("登录地址非法: {}", e))?,
+        )
+        .map_err(|e| anyhow::anyhow!("无法打开登录页: {}", e))?;
 
     let window_close_sender_clone = window_close_sender.clone();
     webview.on_window_event(move |event| {
@@ -862,7 +938,6 @@ async fn start_browser_login(app: AppHandle, state: State<'_, AppState>) -> Resu
         }
     });
 
-    let _ = webview.clear_all_browsing_data();
     let _ = webview.set_focus();
 
     *browser_login = Some(BrowserLoginSession {
@@ -1756,8 +1831,12 @@ pub fn run() {
             traework::commands::traework_reconcile,
         ])
         .setup(|app| {
-            // 获取主窗口并显示
+            // 获取主窗口：先恢复上次的尺寸/位置（无记录时静默跳过），再显示
             if let Some(window) = app.get_webview_window("main") {
+                match window_state::restore(&window.as_ref().window()) {
+                    Ok(()) => log::info!("窗口状态已恢复（若为首次启动则无记录）"),
+                    Err(e) => log::warn!("窗口状态恢复失败: {e}"),
+                }
                 window.show().unwrap();
                 window.set_focus().unwrap();
             }
@@ -1767,6 +1846,13 @@ pub fn run() {
             // 仅在主窗口关闭时才退出应用
             WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == "main" {
+                    // 此刻窗口还是用户拖完的样子，是保存窗口几何的最后时机：
+                    // 下面 process::exit(0) 会直接终止进程，任何挂在退出事件上的
+                    // 保存逻辑都不会执行（见 window_state 模块头注）
+                    match window_state::save(window) {
+                        Ok(()) => log::info!("窗口状态已保存，下次启动恢复"),
+                        Err(e) => log::warn!("窗口状态保存失败: {e}"),
+                    }
                     api.prevent_close();
                     std::process::exit(0);
                 }

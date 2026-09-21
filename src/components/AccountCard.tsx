@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { UsageSummary } from "../types";
+import { leftPercentOf } from "../utils/usage";
 import "./AccountCheckinBadge.css";
 
 interface AccountCardProps {
@@ -73,11 +74,19 @@ export function AccountCard({ account, usage, selected, checkedInToday, onSelect
 
   // CN 积分按适用产品拆分展示：通用积分与 Work 专属积分
   const generalTotal = usage?.credits_general_total ?? 0;
-  const generalUsed = usage?.credits_general_used ?? 0;
+  const generalLeft = usage?.credits_general_left ?? 0;
   const workTotal = usage?.credits_work_total ?? 0;
-  const workUsed = usage?.credits_work_used ?? 0;
-  const generalPercent = generalTotal > 0 ? Math.min(Math.round((generalUsed / generalTotal) * 100), 100) : 0;
-  const workPercent = workTotal > 0 ? Math.min(Math.round((workUsed / workTotal) * 100), 100) : 0;
+  const workLeft = usage?.credits_work_left ?? 0;
+
+  // 用量条统一填「剩余」：绿色 = 还能用的量，灰色轨道 = 已消耗。
+  // 与 usagePercent（已用率，只用于右上角文字告警色）是互补口径，勿混用
+  const leftPercent = leftPercentOf(totalLeft, totalLimit);
+  const generalLeftPercent = leftPercentOf(generalLeft, generalTotal);
+  const workLeftPercent = leftPercentOf(workLeft, workTotal);
+  const bonusLeftPercent = leftPercentOf(
+    (usage?.bonus_dollar_limit ?? 0) - (usage?.bonus_dollar_used ?? 0),
+    usage?.bonus_dollar_limit ?? 0
+  );
 
   const isTokenExpired = false; // TODO: 根据实际 token 过期时间判断
 
@@ -176,10 +185,7 @@ export function AccountCard({ account, usage, selected, checkedInToday, onSelect
 
           {/* 进度条 */}
           <div className="usage-bar">
-            <div
-              className={`usage-bar-fill ${usageLevel}`}
-              style={{ width: `${Math.min(usagePercent, 100)}%` }}
-            />
+            <div className="usage-bar-fill" style={{ width: `${leftPercent}%` }} />
           </div>
 
           {/* 总额度数值 - 显示格式: $0.00 / 6.0 或 $0.00 / 3.0+3.0 */}
@@ -214,12 +220,7 @@ export function AccountCard({ account, usage, selected, checkedInToday, onSelect
                   </span>
                 </div>
                 <div className="compact-bar">
-                  <div
-                    className="compact-bar-fill bonus"
-                    style={{
-                      width: `${usage.bonus_dollar_limit > 0 ? Math.min((usage.bonus_dollar_used / usage.bonus_dollar_limit) * 100, 100) : 0}%`
-                    }}
-                  />
+                  <div className="compact-bar-fill" style={{ width: `${bonusLeftPercent}%` }} />
                 </div>
               </div>
             </div>
@@ -233,10 +234,7 @@ export function AccountCard({ account, usage, selected, checkedInToday, onSelect
             <span className={`usage-percent ${usageLevel}`}>{usagePercent}%</span>
           </div>
           <div className="usage-bar">
-            <div
-              className={`usage-bar-fill ${usageLevel}`}
-              style={{ width: `${Math.min(usagePercent, 100)}%` }}
-            />
+            <div className="usage-bar-fill" style={{ width: `${leftPercent}%` }} />
           </div>
           <div className="usage-numbers">
             <span className="usage-used">
@@ -259,7 +257,7 @@ export function AccountCard({ account, usage, selected, checkedInToday, onSelect
                     </span>
                   </div>
                   <div className="compact-bar">
-                    <div className="compact-bar-fill basic" style={{ width: `${generalPercent}%` }} />
+                    <div className="compact-bar-fill" style={{ width: `${generalLeftPercent}%` }} />
                   </div>
                 </div>
               )}
@@ -273,7 +271,7 @@ export function AccountCard({ account, usage, selected, checkedInToday, onSelect
                     </span>
                   </div>
                   <div className="compact-bar">
-                    <div className="compact-bar-fill work" style={{ width: `${workPercent}%` }} />
+                    <div className="compact-bar-fill" style={{ width: `${workLeftPercent}%` }} />
                   </div>
                 </div>
               )}

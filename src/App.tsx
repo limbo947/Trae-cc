@@ -50,7 +50,6 @@ function App() {
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const [currentPage, setCurrentPage] = useState("accounts");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
-  const [emailFilter, setEmailFilter] = useState("");
   const [quotaFilter, setQuotaFilter] = useState<"all" | "with" | "without">("all");
 
   // Toast 通知状态
@@ -204,6 +203,7 @@ function App() {
             auto_start_enabled: false,
             auto_checkin_enabled: true,
             theme: null,
+            view_mode: null,
           });
         }
       });
@@ -342,6 +342,31 @@ function App() {
     const legacy = localStorage.getItem("trae_theme_v1");
     void handleThemeChange(legacy === "light" ? "light" : "dark");
   }, [appSettings, handleThemeChange]);
+
+  // 视图偏好：与主题同源写进 settings.json（不走 localStorage，理由见 lib.rs 的 `view_mode` 注释）。
+  // 乐观更新——切换按钮要立刻响应，等接口往返再改会有一帧「点了没反应」。
+  const handleViewModeChange = useCallback(
+    async (mode: ViewMode) => {
+      setViewMode(mode);
+      try {
+        const base = appSettings ?? (await api.getSettings());
+        const saved = await api.updateSettings({ ...base, view_mode: mode });
+        setAppSettings(saved);
+      } catch {
+        // 纯展示偏好：写盘失败不弹错打断用户，代价仅是下次启动回落默认视图
+      }
+    },
+    [appSettings]
+  );
+
+  // 回填落盘的视图偏好：settings 异步加载，首帧拿不到。
+  // 用 ref 只回填一次——否则用户手动切换后，写盘返回的新 appSettings 会把本地 state 拉回旧值。
+  const viewModeHydratedRef = useRef(false);
+  useEffect(() => {
+    if (viewModeHydratedRef.current || !appSettings) return;
+    viewModeHydratedRef.current = true;
+    if (appSettings.view_mode === "list") setViewMode("list");
+  }, [appSettings]);
 
   // 删除账号
   const handleDeleteAccount = async (accountId: string) => {
@@ -911,7 +936,6 @@ function App() {
     });
   };
 
-  const normalizedFilter = (emailFilter || "").trim().toLowerCase();
   // TraeCode 账号子集：账号管理页/统计页/批量操作都只处理它，TraeWork 账号走独立面板
   //（两套切换机制相反，混在一个列表里会让用户按同一预期操作）
   const traecodeAccounts = accounts.filter((account) => !isTraeworkAccount(account));
@@ -922,10 +946,6 @@ function App() {
         .filter((account) => {
           // TraeWork 账号不在本页展示
           if (isTraeworkAccount(account)) {
-            return false;
-          }
-          // 邮箱搜索过滤
-          if (normalizedFilter && !(account.email || account.name || "").toLowerCase().includes(normalizedFilter)) {
             return false;
           }
           // 额度筛选
@@ -989,25 +1009,6 @@ function App() {
                     >
                       {selectedIds.size === traecodeAccounts.length && traecodeAccounts.length > 0 ? "取消全选" : "全选"}
                     </button>
-                    <div className="toolbar-search">
-                      <svg
-                        className="search-icon"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                      >
-                        <circle cx="11" cy="11" r="8"></circle>
-                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                      </svg>
-                      <input
-                        type="text"
-                        className="toolbar-search-input"
-                        placeholder="搜索邮箱..."
-                        value={emailFilter}
-                        onChange={(event) => setEmailFilter(event.target.value)}
-                      />
-                    </div>
                     <div className="quota-filter">
                       <select
                         className="quota-filter-select"
@@ -1026,7 +1027,7 @@ function App() {
                     <div className="view-toggle">
                       <button
                         className={`view-btn ${viewMode === "grid" ? "active" : ""}`}
-                        onClick={() => setViewMode("grid")}
+                        onClick={() => handleViewModeChange("grid")}
                         title="卡片视图"
                       >
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
@@ -1038,7 +1039,7 @@ function App() {
                       </button>
                       <button
                         className={`view-btn ${viewMode === "list" ? "active" : ""}`}
-                        onClick={() => setViewMode("list")}
+                        onClick={() => handleViewModeChange("list")}
                         title="列表视图"
                       >
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">

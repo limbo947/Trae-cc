@@ -1,4 +1,5 @@
 import type { UsageSummary } from "../types";
+import { leftPercentOf } from "../utils/usage";
 import "./AccountCheckinBadge.css";
 
 interface AccountListItemProps {
@@ -40,19 +41,14 @@ export function AccountListItem({ account, usage, selected, checkedInToday, onSe
     : isDollarBilling
     ? (usage?.fast_dollar_left ?? 0)
     : (usage ? usage.fast_request_left + usage.extra_fast_request_left : 0);
-  const usagePercent = totalLimit > 0 ? Math.round((totalUsed / totalLimit) * 100) : 0;
+  // 用量条填的是「剩余」：绿色 = 还能用的量，灰色轨道 = 已消耗（口径见 utils/usage.ts）
+  const leftPercent = leftPercentOf(totalLeft, totalLimit);
 
   // CN 积分按适用产品拆分：通用积分与 Work 专属积分
   const generalTotal = usage?.credits_general_total ?? 0;
   const generalLeft = usage?.credits_general_left ?? 0;
   const workTotal = usage?.credits_work_total ?? 0;
   const workLeft = usage?.credits_work_left ?? 0;
-
-  const getUsageColor = () => {
-    if (usagePercent >= 80) return "var(--danger)";
-    if (usagePercent >= 50) return "var(--warning)";
-    return "var(--success)";
-  };
 
   const formatCreatedDate = (timestamp: number) => {
     if (!timestamp) return "-";
@@ -140,10 +136,7 @@ export function AccountListItem({ account, usage, selected, checkedInToday, onSe
               </span>
             </div>
             <div className="usage-bar-mini">
-              <div
-                className="usage-bar-fill-mini"
-                style={{ width: `${Math.min(usagePercent, 100)}%`, background: getUsageColor() }}
-              />
+              <div className="usage-bar-fill-mini" style={{ width: `${leftPercent}%` }} />
             </div>
             <div
               className={`dollar-left ${totalLeft <= 0 ? 'negative' : ''}`}
@@ -167,10 +160,7 @@ export function AccountListItem({ account, usage, selected, checkedInToday, onSe
               </span>
             </div>
             <div className="usage-bar-mini">
-              <div
-                className="usage-bar-fill-mini"
-                style={{ width: `${Math.min(usagePercent, 100)}%`, background: getUsageColor() }}
-              />
+              <div className="usage-bar-fill-mini" style={{ width: `${leftPercent}%` }} />
             </div>
             {isCreditsBilling && (generalTotal > 0 || workTotal > 0) && (
               <div className="usage-split">

@@ -87,6 +87,21 @@
   color: var(--text-muted);
 }
 
+/* 状态面板的分组行：TraeWork / TraeCode 各占一行，行首标签对齐 */
+.status-group-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 64px;
+}
+
 /* 数据分组的路径行 */
 .setting-path-row {
   display: flex;

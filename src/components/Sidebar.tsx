@@ -58,7 +58,7 @@ const ICONS: Record<string, ReactNode> = {
 };
 
 const menuItems = [
-  { id: "accounts", label: "账号管理" },
+  { id: "accounts", label: "TraeCode" },
   { id: "traework", label: "TraeWork" },
   { id: "stats", label: "统计数据" },
   { id: "settings", label: "设置" },

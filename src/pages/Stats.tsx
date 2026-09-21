@@ -152,7 +152,7 @@ export function Stats({ accounts, hasLoaded = true }: StatsProps) {
         }}>
           <div className="empty-icon" style={{ fontSize: "48px", marginBottom: "16px" }}>📊</div>
           <h3 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>暂无账号数据</h3>
-          <p style={{ color: "var(--text-muted)", marginBottom: "24px" }}>请先在"账号管理"中添加账号</p>
+          <p style={{ color: "var(--text-muted)", marginBottom: "24px" }}>请先在"TraeCode"中添加账号</p>
         </div>
       )}
 
@@ -168,7 +168,7 @@ export function Stats({ accounts, hasLoaded = true }: StatsProps) {
         }}>
           <div className="empty-icon" style={{ fontSize: "48px", marginBottom: "16px" }}>👤</div>
           <h3 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>未设置当前账号</h3>
-          <p style={{ color: "var(--text-muted)", marginBottom: "24px" }}>请在“账号管理”中右键点击账号，选择“切换账号”</p>
+          <p style={{ color: "var(--text-muted)", marginBottom: "24px" }}>请在“TraeCode”中右键点击账号，选择“切换账号”</p>
         </div>
       )}
 
@@ -212,7 +212,7 @@ export function Stats({ accounts, hasLoaded = true }: StatsProps) {
           {statsError.includes("Cookies") && (
             <div style={{ fontSize: "14px", color: "var(--text-muted)", marginBottom: "16px", textAlign: "left", maxWidth: "400px", margin: "0 auto 16px" }}>
               <p style={{ marginBottom: "8px" }}><strong>解决方法：</strong></p>
-              <p style={{ marginBottom: "4px" }}>1. 回到"账号管理"</p>
+              <p style={{ marginBottom: "4px" }}>1. 回到"TraeCode"</p>
               <p style={{ marginBottom: "4px" }}>2. 右键点击当前账号 → 选择"编辑账号"</p>
               <p style={{ marginBottom: "4px" }}>3. 输入邮箱和密码，点击"保存并登录"</p>
               <p style={{ fontSize: "12px", marginTop: "8px", color: "var(--text-secondary)" }}>

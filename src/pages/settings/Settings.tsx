@@ -41,6 +41,7 @@ export function Settings({ onToast, settings, onSettingsChange, onAccountsChange
       auto_start_enabled: false,
       auto_checkin_enabled: true,
       theme: null,
+      view_mode: null,
     }),
     []
   );
