@@ -1,10 +1,13 @@
 use anyhow::{anyhow, Result};
 use std::fs;
 use std::path::PathBuf;
-use uuid::Uuid;
 
+use super::device_identity::align_device_identities;
 use super::types::*;
 use crate::api::{TraeApiClient, UsageSummary, UsageQueryResponse, login_with_email};
+
+
+
 
 /// 账号管理器
 pub struct AccountManager {
@@ -18,17 +21,34 @@ impl AccountManager {
         let data_path = Self::get_data_path()?;
         let mut store = Self::load_store(&data_path)?;
 
-        // 确保每个账号都有机器码
-        let mut changed = false;
+        // 设备标识回填：以 `user_id` 为键**跨应用统一**（规则见 `device_identity_key`）
+        //
+        // 为什么推翻了上一版「TraeWork 一律置空」：当时认为账号库的值会与快照里的实际值不一致
+        // （实测确实如此），于是清掉 TraeWork 的值、只认快照。但那样漏了另一半约束——同一真实
+        // 账号在库里是**两条记录**（`app` 不同、`user_id` 相同），清掉之后两条记录再无关联，
+        // 同一账号因此可以同时持两套设备标识（实测 `3066997166324192`：traecode 侧 `caf505a4…`、
+        // traework 侧 `65e414a1…`），服务端把它当两台设备——这正是账号级风控
+        // （`Login Abnormality`）的成因方向。现在改为「设备标识是 `user_id` 的属性」：同 `user_id`
+        // 的记录共用一个值（快照槽位由 `traework::device` 在保存时对齐），不同 `user_id` 之间才隔离。
+        // 空缺值由 `derived_machine_id` 稳定派生，回填因此**幂等**、可反复执行。
+        let mut changed = align_device_identities(&mut store.accounts);
+
         for account in &mut store.accounts {
-            if account.machine_id.is_none() {
-                account.machine_id = Some(Uuid::new_v4().to_string());
-                changed = true;
-            }
             // 签到设备号回填：只补空值，**绝不无条件重算**——重算会把所有账号静默换号，
             // 服务端视为新设备（等价于批量重置），也会让当日已签到判定失效
             if account.device_id.as_deref().map_or(true, |v| v.trim().is_empty()) {
-                account.device_id = Some(crate::api::device_id::resolve_device_id(account));
+                // TraeWork 账号按 traework:{uid} 前缀种子派生（与 upsert 落盘同一种子）。
+                // 不做这步回填会留洞：resolve_device_id 的运行时回退种子是裸 user_id
+                // （TraeWork 的 user_id 就是 uid），与落盘种子不同——同一账号「落盘前」
+                // 与「重新保存落盘后」是两个设备号；且只走 upsert 意味着从不重存登录态
+                // 的存量账号永远裸 uid 回退
+                account.device_id = Some(if account.app == APP_TRAEWORK {
+                    crate::api::device_id::derive_device_id(&traework_device_seed(
+                        account.uid.as_deref().unwrap_or(&account.id),
+                    ))
+                } else {
+                    crate::api::device_id::resolve_device_id(account)
+                });
                 changed = true;
             }
         }
@@ -691,6 +711,15 @@ impl AccountManager {
             .ok_or_else(|| anyhow!("账号不存在"))
     }
 
+    /// 该 `user_id` 的设备标识（**跨应用共享**，永不为空）
+    ///
+    /// 规则与理由全在 [`super::device_identity`]，这里只做转发——调用方（命令层）不该知道
+    /// 「traecode 优先、缺失则派生」这些细节。**必须与启动回填共用同一实现**，否则
+    /// 「回填算出的值」与「保存时传给快照的值」会漂移。
+    pub fn shared_machine_id(&self, user_id: &str) -> String {
+        super::device_identity::shared_machine_id(&self.store.accounts, user_id)
+    }
+
     /// 按 uid 落库/更新一个 TraeWork 账号，返回落库后的记录
     ///
     /// 为什么以 uid 为唯一键而不是新建一条：TraeWork 的登录态在 TraeWork 侧，账号库只是
@@ -706,6 +735,10 @@ impl AccountManager {
             return Err(anyhow!("TraeWork uid 不能为空"));
         }
 
+        // 先取值再可变借用 `store`：设备标识可能来自同 user_id 的 traecode 记录，
+        // 必须在 `iter_mut()` 之前读出来（规则见 `device_identity_key`）
+        let machine_id = self.shared_machine_id(uid);
+
         if let Some(existing) = self
             .store
             .accounts
@@ -720,6 +753,24 @@ impl AccountManager {
             if let Some(n) = name.filter(|n| !n.trim().is_empty()) {
                 existing.name = n;
             }
+            // 清 credential_stale 冷却挂在「保存登录态」而非「切换」：切换只是把旧凭据
+            // 恢复到现场，新凭据是客户端续期后才产生的；重新保存才是把新 token 写进
+            // 快照的那一步。收敛进一次 upsert（登记 + 清冷却）避免第二次取锁与落盘
+            crate::api::checkin_guard::clear_cooldown_reason(
+                existing,
+                crate::api::checkin_guard::REASON_CREDENTIAL_STALE,
+            );
+            // 设备号落盘：为空时按 traework:{uid} 种子派生（types::traework_device_seed）。
+            // upsert 是唯一登记入口，在此补齐可同时覆盖新建与存量，不在 new_traework 里派生
+            if existing.device_id.as_deref().map_or(true, |v| v.trim().is_empty()) {
+                existing.device_id =
+                    Some(crate::api::device_id::derive_device_id(&traework_device_seed(uid)));
+            }
+            // 设备标识对齐到该 user_id 的目标值（可能来自同 user_id 的 traecode 记录）——
+            // 这里是「同一账号在 TraeCode 与 TraeWork 侧必须是同一台设备」的落点
+            if existing.machine_id.as_deref() != Some(machine_id.as_str()) {
+                existing.machine_id = Some(machine_id.clone());
+            }
             existing.updated_at = chrono::Utc::now().timestamp();
             let updated = existing.clone();
             self.save_store()?;
@@ -732,6 +783,10 @@ impl AccountManager {
                 .unwrap_or_else(|| uid.to_string()),
         );
         account.snapshot_slot = Some(uid.to_string());
+        // 新建记录也要落设备标识：`new_traework` 刻意留空是为了让**分配点唯一**
+        // （全部收敛到本函数与启动回填），而不是让这条记录没有身份
+        account.machine_id = Some(machine_id);
+        account.device_id = Some(crate::api::device_id::derive_device_id(&traework_device_seed(uid)));
         self.store.accounts.push(account.clone());
         self.save_store()?;
         Ok(account)
@@ -1583,14 +1638,12 @@ impl AccountManager {
     }
 
     /// 列出参与签到的账号；`only_pending_today` 为 true 时只返回「今日未签到」的账号
-    /// （方案B 自动签到用；手动全量签到传 false）
+    /// （方案B 自动签到用；手动全量签到传 false）。过滤条件只剩 is_active 与日期：
+    /// TraeWork 账号已纳入签到（凭据走快照解析，无凭据由 checkin.rs 记 Skipped 跳过）
     pub fn list_accounts_for_checkin(&self, today: &str, only_pending_today: bool) -> Vec<Account> {
         self.store
             .accounts
             .iter()
-            // TraeWork 账号没有 Cookies/JWT，签到的网络请求必然失败；不在这里拦掉的话，
-            // 每次签到都会给它们各写一条「失败 + 冷却」，把账号列表噪音化
-            .filter(|a| a.is_traecode())
             .filter(|a| a.is_active)
             .filter(|a| !only_pending_today || a.last_checkin_date.as_deref() != Some(today))
             .cloned()
@@ -1727,5 +1780,80 @@ mod tests {
             ),
         ]);
         assert_eq!(manager.traecode_index_by_user_id("168695880747001"), Some(1));
+    }
+
+    /// upsert TraeWork 账号时要沿用同 `user_id` 的 TraeCode 设备标识，而不是另生成一个
+    #[test]
+    fn upsert_traework账号沿用同user_id的traecode设备标识() {
+        let path = std::env::temp_dir().join(format!(
+            "trae-cc-test-shared-mid-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut tc = Account::new(
+            "A".to_string(),
+            String::new(),
+            String::new(),
+            "uid-shared".to_string(),
+            String::new(),
+        );
+        tc.machine_id = Some("mid-from-traecode".to_string());
+        let mut manager = AccountManager {
+            store: AccountStore {
+                accounts: vec![tc],
+                ..Default::default()
+            },
+            data_path: path.clone(),
+        };
+
+        let account = manager.upsert_traework_account("uid-shared", None).unwrap();
+        assert_eq!(account.machine_id.as_deref(), Some("mid-from-traecode"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// TraeWork 签到设备号：upsert 落盘用 `traework:{uid}` 前缀种子（与启动回填同一种子）；
+    /// 只补空值，绝不重算既有值。前缀保证与 traecode 侧的裸 `user_id` 种子分属两个域，
+    /// 不会因「两条记录撞同一设备号」触发 9095 互踢
+    #[test]
+    fn traework设备号按前缀种子落盘且只补空值() {
+        let path = std::env::temp_dir().join(format!(
+            "trae-cc-test-upsert-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut manager = AccountManager {
+            store: AccountStore {
+                accounts: vec![],
+                ..Default::default()
+            },
+            data_path: path.clone(),
+        };
+
+        let uid = "168695880747001";
+        let account = manager.upsert_traework_account(uid, None).unwrap();
+        let expected = crate::api::device_id::derive_device_id(&traework_device_seed(uid));
+        assert_eq!(account.device_id.as_deref(), Some(expected.as_str()));
+        assert_ne!(
+            expected,
+            crate::api::device_id::derive_device_id(uid),
+            "前缀种子与裸 uid 种子必须得到不同设备号"
+        );
+
+        // 只补空值：已落盘的设备号（如随机重置后的值）在再次 upsert 后原样保留
+        let custom = "1234567890123456";
+        if let Some(acc) = manager.store.accounts.first_mut() {
+            acc.device_id = Some(custom.to_string());
+        }
+        let again = manager.upsert_traework_account(uid, None).unwrap();
+        assert_eq!(again.device_id.as_deref(), Some(custom));
+
+        let _ = fs::remove_file(&path);
     }
 }

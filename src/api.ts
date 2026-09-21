@@ -232,9 +232,14 @@ export async function checkinAccount(accountId: string): Promise<CheckinResult> 
   return invokeNetwork("checkin_account", { accountId });
 }
 
-// 全部账号签到（手动）
+// 全部账号签到（手动，只签 TraeCode）
 export async function checkinAllAccounts(): Promise<CheckinResult[]> {
   return invokeNetwork("checkin_all_accounts");
+}
+
+// 全部 TraeWork 账号签到（手动，TraeWork 面板按钮；凭据按快照解析，无凭据返回 skipped）
+export async function traeworkCheckinAll(): Promise<CheckinResult[]> {
+  return invokeNetwork("traework_checkin_all");
 }
 
 // 自动签到（方案B：仅今日未签到的账号，启动时静默调用）
@@ -312,6 +317,13 @@ export async function traeworkOverview(): Promise<TraeworkOverview> {
 // 识别当前 TraeWork 登录账号（证据链推导，可能置信度不足）
 export async function traeworkDiscover(): Promise<TraeworkUidEvidence> {
   return invoke("traework_discover");
+}
+
+// TraeWork 账号积分余额
+// 与 get_account_usage 是两条独立链路：它会现读快照（或当前账号的实时登录态）解出凭据，
+// 而不是读账号库里存的 JWT/Cookies——TraeWork 账号那两项恒为空
+export async function traeworkCredits(accountId: string): Promise<UsageSummary> {
+  return invokeNetwork("traework_credits", { accountId });
 }
 
 // 保存当前登录态（关客户端 → 快照 → 登记账号 → 重启客户端）

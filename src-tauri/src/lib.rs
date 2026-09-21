@@ -1544,6 +1544,18 @@ async fn checkin_all_accounts(state: State<'_, AppState>) -> Result<Vec<api::che
         .map_err(ApiError::from)
 }
 
+/// 全部 TraeWork 账号签到（手动触发，TraeWork 面板按钮）
+///
+/// 不复用 `checkin_all_accounts`：那个按钮的语义是「只签 TraeCode」，TraeWork 走
+/// 自己的批次（凭据按快照解析）。单账号签到复用已注册的 `checkin_account`（按 id
+/// 直调，不经过列表过滤），不新增命令。
+#[tauri::command]
+async fn traework_checkin_all(state: State<'_, AppState>) -> Result<Vec<api::checkin::CheckinResult>> {
+    api::checkin::checkin_all_traework(&state.account_manager)
+        .await
+        .map_err(ApiError::from)
+}
+
 /// 自动签到（方案B）：只处理「今日未签到」的账号，启动时静默调用
 #[tauri::command]
 async fn auto_checkin(state: State<'_, AppState>) -> Result<Vec<api::checkin::CheckinResult>> {
@@ -1720,6 +1732,7 @@ pub fn run() {
             get_user_statistics,
             checkin_account,
             checkin_all_accounts,
+            traework_checkin_all,
             auto_checkin,
             reset_account_device_id,
             open_pricing,
@@ -1733,6 +1746,7 @@ pub fn run() {
             get_runtime_status,
             traework::commands::traework_overview,
             traework::commands::traework_discover,
+            traework::commands::traework_credits,
             traework::commands::traework_save_current_login,
             traework::commands::traework_switch_account,
             traework::commands::traework_delete_snapshot,

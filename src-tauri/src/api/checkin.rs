@@ -25,10 +25,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use crate::account::{Account, AccountManager, CheckinCooldown};
+use crate::account::{Account, AccountManager, CheckinCooldown, APP_TRAEWORK};
 use crate::api::checkin_guard::{self, CheckinOutcome, CooldownTrigger};
 use crate::api::device_id;
 use crate::api::TraeApiClient;
+use crate::traework::{credentials, profile::Ctx as TraeworkCtx};
 
 /// 签到端点域名：优先 `api.trae.cn`（traework2api 实测值），失败回退 `api.trae.com.cn`
 const CHECKIN_HOSTS: [&str; 2] = ["https://api.trae.cn", "https://api.trae.com.cn"];
@@ -50,6 +51,9 @@ pub enum CheckinState {
     RateLimited,
     /// 本次未尝试（账号处于冷却期）：不是错误，不该进失败汇总
     Cooldown,
+    /// 本次未尝试（TraeWork 账号无可达凭据）：不是失败（不进失败汇总、不弹红字），
+    /// 也没有冷却语义（不显示冷却徽标）——用户自救动作是「切换 + 保存当前登录态」
+    Skipped,
     /// 签到失败（活动未开放、凭据失效等）
     Failed,
 }
@@ -122,6 +126,9 @@ enum CheckinError {
     EntitlementDenied,
     /// 9004 设备号缺失或非法：设备号隔离后不应再出现，出现即回归信号（直报失败）
     DeviceInvalid(String),
+    /// TraeWork 快照凭据失效：不重试、不刷新（该账号没有 Cookies 刷新链路），
+    /// 落 credential_stale 冷却——绝不能落 auth_expired 的 i64::MAX 哨兵（无清除入口）
+    CredentialStale,
     /// 其它失败：无冷却、不重试
     Other(String),
 }
@@ -133,6 +140,7 @@ impl CheckinError {
             Self::AuthExpired => Some(CooldownTrigger::AuthExpired),
             Self::RateLimited(t) | Self::Transient(t) => Some(*t),
             Self::EntitlementDenied => Some(CooldownTrigger::EntitlementDenied),
+            Self::CredentialStale => Some(CooldownTrigger::CredentialStale),
             Self::DeviceInvalid(_) | Self::Other(_) => None,
         }
     }
@@ -151,6 +159,7 @@ impl CheckinError {
             Self::RateLimited(_) => "签到人数过多，请稍后重试".to_string(),
             Self::Transient(_) => "网络或服务端暂时不可用".to_string(),
             Self::EntitlementDenied => "账号权益不足，无法签到".to_string(),
+            Self::CredentialStale => "登录凭据已过期，请切换到该账号并重新「保存当前登录态」".to_string(),
             Self::DeviceInvalid(detail) => detail.clone(),
             Self::Other(detail) => detail.clone(),
         }
@@ -403,12 +412,112 @@ fn error_round(account: &Account, err: &CheckinError) -> RoundResult {
     }
 }
 
-/// 处理单个账号：token 失效时先用 Cookies 刷新再重试一次
+/// 批次内单个 TraeWork 账号的凭据解析结果（`Skip` 携带面向用户的跳过原因）
+enum TraeworkCredential {
+    Token(String),
+    Skip(String),
+}
+
+/// 批次级解析 TraeWork 凭据：一次 `spawn_blocking` + 一次 `Ctx::from_env`
+///
+/// 为什么批次级而不是账号级：读文件是阻塞 IO，账号级要每个账号一次 `spawn_blocking`；
+/// 且批次期间的 30/90s sleep 不会改变快照内容，重试轮直接复用同一份结果即可。
+/// 整个解析在不持 `account_manager` 锁的前提下完成（全仓「不持锁做 IO」约定）。
+/// `Ctx::from_env` 失败属环境级异常，不报错、不阻断批次——全部 TraeWork 账号按
+/// 无凭据记 `Skipped`，traecode 账号照常进行。
+async fn resolve_traework_credentials(accounts: &[Account]) -> HashMap<String, TraeworkCredential> {
+    let slots: Vec<(String, String)> = accounts
+        .iter()
+        .filter(|a| a.app == APP_TRAEWORK)
+        .filter_map(|a| a.slot().map(|s| (a.id.clone(), s.to_string())))
+        .collect();
+    if slots.is_empty() {
+        return HashMap::new();
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let ctx = match TraeworkCtx::from_env() {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                return slots
+                    .into_iter()
+                    .map(|(id, _)| {
+                        (id, TraeworkCredential::Skip(format!("TraeWork 环境不可用，本次跳过: {e}")))
+                    })
+                    .collect::<HashMap<_, _>>();
+            }
+        };
+        slots
+            .into_iter()
+            .map(|(id, slot)| {
+                // 凭据不可达是「有理由的跳过」而非异常：把 resolve_token 的可操作
+                // 文案（请切换到 X 并重新保存）原样透传给前端 info 提示
+                let cred = match credentials::resolve_token(&ctx, &slot) {
+                    Ok(token) => TraeworkCredential::Token(token),
+                    Err(e) => TraeworkCredential::Skip(e),
+                };
+                (id, cred)
+            })
+            .collect()
+    })
+    .await
+    // join 失败（解析任务 panic）→ 空表：各 TraeWork 账号按「凭据缺席」跳过，批次不中断
+    .unwrap_or_default()
+}
+
+fn skipped_round(account: &Account, detail: String) -> RoundResult {
+    RoundResult {
+        checkin: CheckinResult::plain(account, CheckinState::Skipped, detail),
+        retryable: false,
+    }
+}
+
+/// TraeWork 账号的签到轮：凭据由批次级解析给出，**没有** Cookies 刷新链路可走
+///
+/// 凭据失效映射为 `CredentialStale` 而非 `AuthExpired`：该账号 `cookies` 恒为空串，
+/// `refresh_token_via_cookies` 对它是恒空转——必须按 app 在刷新尝试之前拦截；
+/// 且 `auth_expired` 的 `i64::MAX` 哨兵无清除入口，会把账号在冷却表里永久拦死。
+async fn traework_round(client: &reqwest::Client, account: &Account, token: &str) -> RoundResult {
+    // claim 必须带设备号：与 traecode 同走 device_id 解析（落盘值 → 派生回退）
+    let device_id_str = device_id::resolve_device_id(account);
+    let outcome = checkin_with_token(client, token, Some(device_id_str.as_str())).await;
+    match outcome {
+        Ok((state, detail)) => RoundResult {
+            checkin: CheckinResult::plain(account, state, detail),
+            retryable: false,
+        },
+        Err(err) => {
+            let err = match err {
+                CheckinError::AuthExpired => CheckinError::CredentialStale,
+                other => other,
+            };
+            error_round(account, &err)
+        }
+    }
+}
+
+/// 处理单个账号：TraeWork 按批次解析结果分派（无凭据=跳过，不发任何请求）；
+/// traecode 走既有链路（token 失效时用 Cookies 刷新再重试一次）
 async fn process_account(
     client: &reqwest::Client,
     manager: &Mutex<AccountManager>,
     account: &Account,
+    traework: Option<&TraeworkCredential>,
 ) -> RoundResult {
+    // 按 app 显式分派（勿改成「非 traework 就走 cookies」的单边判断再往里加分支）：
+    // `_` 臂与 `is_traecode` 的定义（app != traework）同口径，天然穷尽——
+    // 否则 TraeWork 账号会落到 cookies 刷新路径，一屏 auth_expired
+    if account.app == APP_TRAEWORK {
+        return match traework {
+            Some(TraeworkCredential::Token(token)) => {
+                traework_round(client, account, token).await
+            }
+            Some(TraeworkCredential::Skip(detail)) => skipped_round(account, detail.clone()),
+            // 凭据缺席（解析任务异常等兜底）：按无凭据跳过，绝不误入 traecode 路径
+            None => skipped_round(account, "未取得 TraeWork 快照凭据，本次跳过签到".to_string()),
+        };
+    }
+
     let mut token = account.jwt_token.clone().filter(|t| !t.trim().is_empty());
     if token.is_none() {
         token = refresh_token_via_cookies(manager, &account.id).await;
@@ -456,6 +565,7 @@ async fn process_account(
 async fn run_round(
     manager: &Mutex<AccountManager>,
     accounts: Vec<Account>,
+    traework_creds: &HashMap<String, TraeworkCredential>,
 ) -> Result<(Vec<CheckinResult>, HashSet<String>)> {
     if accounts.is_empty() {
         return Ok((Vec::new(), HashSet::new()));
@@ -469,7 +579,12 @@ async fn run_round(
     let mut results = Vec::with_capacity(accounts.len());
     let mut retryable_ids = HashSet::new();
     for account in accounts {
-        let round = process_account(&client, manager, &account).await;
+        let traework = if account.app == APP_TRAEWORK {
+            traework_creds.get(&account.id)
+        } else {
+            None
+        };
+        let round = process_account(&client, manager, &account, traework).await;
         if round.retryable {
             retryable_ids.insert(account.id.clone());
         }
@@ -519,7 +634,9 @@ fn collect_outcomes(results: &[CheckinResult], today: &str) -> Vec<CheckinOutcom
                         }),
                     })
                 }
-                CheckinState::Cooldown => None,
+                // Skipped 与 Cooldown 一样不产生落盘项：既不写日期也不写冷却——
+                // 「没凭据」不是签到结果，写日期会骗过自动签到的当日去重
+                CheckinState::Cooldown | CheckinState::Skipped => None,
             }
         })
         .collect()
@@ -563,7 +680,7 @@ async fn persist_outcomes(manager: &Mutex<AccountManager>, outcomes: Vec<Checkin
     }
 }
 
-/// 单账号签到（手动触发，右键菜单）——防重入 + 冷却准入，单轮结束即落盘
+/// 单账号签到（手动触发，右键菜单 / TraeWork 面板）——防重入 + 冷却准入，单轮结束即落盘
 pub async fn checkin_one_account(manager: &Mutex<AccountManager>, account_id: &str) -> Result<CheckinResult> {
     let _guard = checkin_guard::try_acquire().ok_or_else(|| anyhow!("签到进行中，请稍候再试"))?;
 
@@ -572,40 +689,60 @@ pub async fn checkin_one_account(manager: &Mutex<AccountManager>, account_id: &s
         guard.get_account(account_id)?
     };
 
-    // 批量入口已按 `is_traecode` 过滤（见 list_accounts_for_checkin），单账号入口必须
-    // 独立拦一次：右键菜单是按 id 直接调的，不经过列表过滤
-    if !account.is_traecode() {
-        return Err(anyhow!("TraeWork 账号不支持签到"));
-    }
+    // 不再按 app 拒绝 TraeWork：按 id 直调的入口给它一次完整的分派——
+    // 凭据解析失败折算成 Skipped 结果（是「有理由的跳过」而非错误），凭据可达则照常签到
+    let traework_creds = resolve_traework_credentials(std::slice::from_ref(&account)).await;
 
     let (mut results, pending) = snapshot_cooldowns(std::slice::from_ref(&account));
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let (round_results, _) = run_round(manager, pending).await?;
+    let (round_results, _) = run_round(manager, pending, &traework_creds).await?;
     results.extend(round_results);
 
     persist_outcomes(manager, collect_outcomes(&results, &today)).await;
     Ok(results.pop().expect("单账号签到必然产生一条结果"))
 }
 
-/// 全部账号签到（手动触发，工具栏按钮）——防重入 + 冷却准入，单轮不重试
+/// 全部账号签到（手动触发，TraeCode 工具栏按钮）——只签 TraeCode，不连带 TraeWork：
+/// 按钮语义应单一，用户按 TraeCode 的按钮时预期只处理 TraeCode；TraeWork 用面板自己的按钮
 pub async fn checkin_all(manager: &Mutex<AccountManager>) -> Result<Vec<CheckinResult>> {
+    checkin_scope(manager, Some(crate::account::APP_TRAECODE)).await
+}
+
+/// 全部 TraeWork 账号签到（手动触发，TraeWork 面板按钮），注册为 `traework_checkin_all` 命令
+pub async fn checkin_all_traework(manager: &Mutex<AccountManager>) -> Result<Vec<CheckinResult>> {
+    checkin_scope(manager, Some(APP_TRAEWORK)).await
+}
+
+/// 按应用范围执行一次手动批次（防重入 + 冷却准入，单轮不重试）
+///
+/// app 过滤的落点固定在本文件：`list_accounts_for_checkin` 返回全部 app，由这里在锁外
+/// 按 `app` 参数 `retain`（`None` 不过滤）。不给 manager 侧加 app 参数——过滤是纯调用方
+/// 语义，且 account_manager.rs 已超单文件上限、只允许删行。
+async fn checkin_scope(manager: &Mutex<AccountManager>, app: Option<&str>) -> Result<Vec<CheckinResult>> {
     let _guard = checkin_guard::try_acquire().ok_or_else(|| anyhow!("签到进行中，请稍候再试"))?;
 
-    let accounts = {
+    let mut accounts = {
         let guard = manager.lock().await;
         guard.list_accounts_for_checkin("", false)
     };
+    if let Some(app) = app {
+        accounts.retain(|a| a.app == app);
+    }
+
+    // traecode-only 范围下该函数零文件 IO（无 traework 账号即提前返回），不拖慢原链路
+    let traework_creds = resolve_traework_credentials(&accounts).await;
 
     let (mut results, pending) = snapshot_cooldowns(&accounts);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let (round_results, _) = run_round(manager, pending).await?;
+    let (round_results, _) = run_round(manager, pending, &traework_creds).await?;
     results.extend(round_results);
 
     persist_outcomes(manager, collect_outcomes(&results, &today)).await;
     Ok(results)
 }
 
-/// 自动签到（方案B）：仅今日未签到账号；批次级重试轮次，全部轮次结束后统一落盘一次
+/// 自动签到（方案B）：仅今日未签到账号（**含 TraeWork**，已确认纳入）；批次级重试轮次，
+/// 全部轮次结束后统一落盘一次
 ///
 /// 为什么批次级轮次而非账号级重试：账号级最坏耗时随账号数线性增长（5 个限流账号 ≈ 10 分钟）
 /// 且全程持锁；批次级把等待次数固定为 2 次，最坏 ≈ 2 分钟、与账号数无关。
@@ -626,7 +763,8 @@ pub async fn auto_checkin_pending(manager: &Mutex<AccountManager>) -> Result<Vec
 
     // 冷却准入快照：冷却中的账号本次不请求，其落盘冷却原样保留
     let (mut all_results, pending) = snapshot_cooldowns(&pending_raw);
-    let (mut round_results, mut retryable_ids) = run_round(manager, pending).await?;
+    let traework_creds = resolve_traework_credentials(&pending).await;
+    let (mut round_results, mut retryable_ids) = run_round(manager, pending, &traework_creds).await?;
     all_results.append(&mut round_results);
 
     for (index, sleep_secs) in RETRY_WAITS_SECS.iter().enumerate() {
@@ -645,11 +783,55 @@ pub async fn auto_checkin_pending(manager: &Mutex<AccountManager>) -> Result<Vec
             let guard = manager.lock().await;
             retryable_ids.iter().filter_map(|id| guard.get_account(id).ok()).collect()
         };
-        let (mut round_results, new_retryable) = run_round(manager, retry_accounts).await?;
+        // 重试轮复用首轮凭据解析结果：批次期间的 sleep 不会改变快照内容
+        let (mut round_results, new_retryable) = run_round(manager, retry_accounts, &traework_creds).await?;
         retryable_ids = new_retryable;
         all_results.append(&mut round_results);
     }
 
     persist_outcomes(manager, collect_outcomes(&all_results, &today)).await;
     Ok(all_results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn traework_account() -> Account {
+        Account::new_traework("168695880747001".to_string(), "似我".to_string())
+    }
+
+    /// TraeWork 无凭据 → Skipped：不是失败（不进失败汇总）、也没有冷却语义，
+    /// collect_outcomes 对它不产出任何落盘项（既不写日期也不写冷却）——写日期会
+    /// 骗过自动签到的当日去重，写冷却则把「没凭据」误升格成「被惩罚」
+    #[test]
+    fn 无凭据跳过不产生落盘项() {
+        let account = traework_account();
+        let round = skipped_round(&account, "快照里没有可用凭据…".to_string());
+        assert_eq!(round.checkin.state, CheckinState::Skipped);
+        assert!(!round.retryable);
+        assert!(
+            round.checkin.cooldown_reason.is_none() && round.checkin.cooldown_until.is_none(),
+            "skipped 不得携带冷却字段"
+        );
+
+        let outcomes = collect_outcomes(std::slice::from_ref(&round.checkin), "2026-09-20");
+        assert!(outcomes.is_empty(), "Skipped 不得写日期或冷却");
+    }
+
+    /// TraeWork 凭据失效必须落 credential_stale（12h、可被「保存登录态」清除），
+    /// 绝不能落 auth_expired 的 i64::MAX 哨兵——哨兵无清除入口，会把账号在冷却表里
+    /// 永久卡死，用户切过去重新保存也救不回来（阶段 3 的核心红线）
+    #[test]
+    fn 凭据失效落credential_stale而非auth_expired哨兵() {
+        let account = traework_account();
+        let round = error_round(&account, &CheckinError::CredentialStale);
+        assert_eq!(round.checkin.state, CheckinState::Failed);
+        assert_eq!(
+            round.checkin.cooldown_reason.as_deref(),
+            Some(checkin_guard::REASON_CREDENTIAL_STALE)
+        );
+        assert_ne!(round.checkin.cooldown_until, Some(i64::MAX));
+        assert!(!round.retryable, "本工具没有 TraeWork 的刷新链路，重试必然白打");
+    }
 }

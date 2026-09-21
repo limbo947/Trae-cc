@@ -39,6 +39,17 @@ pub struct SlotStatus {
     pub expired_at: Option<String>,
     /// 快照内凭据的到期时刻（refresh）——**它才是「该槽位还能否免登录」的判据**
     pub refresh_expired_at: Option<String>,
+    /// 该槽位快照内的设备标识（`machineid`）；读不到为 None
+    ///
+    /// 为什么由**命令层**填充：需跨槽位比较才能判断「是否与别的账号撞号」，属调用方视角
+    /// （与上面两个凭据时间同理，本模块只认文件系统）
+    pub machine_id: Option<String>,
+    /// 与本槽位设备标识**相同**的其它账号槽位（空 = 已隔离）
+    ///
+    /// 为什么要有这个字段：TraeWork 原有实现假定「设备标识随快照走 = 天然一账号一设备」，
+    /// 2026-09-21 实测否定（多个账号槽共用同一 machineid）。不把结果暴露出来，用户就只能
+    /// 靠「又被风控了」来推测隔离有没有生效——这正是本次要消灭的不可验证状态。
+    pub shares_device_with: Vec<String>,
 }
 
 /// 递归求目录/文件体积（求值失败按 0 计——体积只用于展示，不该阻断任何流程）
@@ -280,9 +291,12 @@ pub fn slot_status(ctx: &Ctx, slot: &str) -> SlotStatus {
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64),
-        // 凭据时间由调用方按需填（见字段注释：解析登录态属 uid 层）
+        // 凭据时间与设备标识均由调用方按需填（见字段注释：解析登录态属 uid 层、
+        // 跨槽位比较属调用方视角）
         expired_at: None,
         refresh_expired_at: None,
+        machine_id: None,
+        shares_device_with: Vec::new(),
     }
 }
 

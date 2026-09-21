@@ -18,6 +18,8 @@
 //! 即可满足「明确进度、防连点」的原始诉求。
 
 pub mod commands;
+pub mod credentials;
+pub mod device;
 pub mod locate;
 pub mod proc;
 pub mod profile;
@@ -134,6 +136,10 @@ pub fn save_current_login(
     ctx: &Ctx,
     slot: &str,
     sink: &dyn ProgressSink,
+    // 该账号（按 `user_id`）的目标设备标识，由命令层从账号库取出后传入。
+    // 为什么不让本层自己去取：编排层不持 `AccountManager` 锁（分层见 `mod.rs` 头部），
+    // 而设备标识的权威在账号库（`AccountManager::shared_machine_id`）
+    shared_machine_id: Option<&str>,
 ) -> Result<SaveOutcome, String> {
     let _guard = action_gate()
         .try_lock()
@@ -154,7 +160,25 @@ pub fn save_current_login(
     // 当时 uid 来源（icube_gtm.users）滞后，导致「按 A 保存、实际存的是 B」，
     // 而 B 的第二次保存又把 A 的快照整个覆盖掉。校验以快照内部证据为最终裁决，
     // 不依赖任何外部字段的时序，因此能兜住上游格式/时序的漂移。
+    let requested_slot = slot.to_string();
     let slot = verify_slot_name(ctx, slot, sink)?;
+
+    // 槽位被归位（uid 来源滞后）时，调用方传入的设备标识属于**另一个账号**，必须丢弃——
+    // 否则会把 A 的设备标识写到 B 的快照与现场上，比不做对齐更糟
+    let shared_machine_id = if slot == requested_slot {
+        shared_machine_id
+    } else {
+        sink.step(
+            "device",
+            StepStatus::Warn,
+            "槽位已归位到另一个账号，本次不使用账号库中的设备标识",
+        );
+        None
+    };
+
+    // 设备标识对齐（必须在客户端仍处于关闭状态时做：写入现场的文件会被运行中的客户端回写覆盖）。
+    // 为什么放在槽名校验之后：对齐要同时改槽位快照与现场，槽名定下来才知道改的是哪一个槽位
+    let device = device::normalize_on_save(ctx, &slot, sink, shared_machine_id);
 
     // 标记只在保存成功后写：槽位里确实有这份现场，标记才不会指向不存在的快照
     snapshot::write_current_slot(ctx, &slot)?;
@@ -177,6 +201,7 @@ pub fn save_current_login(
         slot,
         copied,
         profile,
+        device,
     })
 }
 
@@ -192,6 +217,8 @@ pub struct SaveOutcome {
     pub copied: usize,
     /// 账号展示信息（用户名/脱敏手机/头像），解不出时为 None
     pub profile: Option<uid::AccountProfile>,
+    /// 设备标识归一结果（撞号时已给该账号换上一套独立标识，见 `device` 模块）
+    pub device: device::NormalizeOutcome,
 }
 
 /// 校验 `槽名 == 快照内解出的账号 id`；不符则把快照改名归位，返回纠正后的槽名
@@ -339,6 +366,27 @@ pub fn reconcile(ctx: &Ctx, sink: &dyn ProgressSink) -> Result<ReconcileReport, 
     })
 }
 
+/// 把设备标识同步结果落到日志
+///
+/// 为什么单独抽：正常路径与回滚路径都要记这条账，关心的信息也相同。用户可见的反馈由
+/// `apply_registry` 内部的步骤承担，这里补的是**持久化对账依据**——app.log 里能查到
+/// 「这次切换到底把注册表改成了什么」，而不必去翻瞬时的界面提示。
+fn log_registry_outcome(outcome: &device::RegistryOutcome) {
+    match outcome {
+        device::RegistryOutcome::Applied { value, changed } => log::info!(
+            "[traework] 注册表设备标识同步完成（{}，{}）",
+            device::short(value),
+            if *changed { "已变更" } else { "原本一致" }
+        ),
+        device::RegistryOutcome::Skipped(reason) => {
+            log::warn!("[traework] 注册表设备标识同步跳过: {reason}")
+        }
+        device::RegistryOutcome::Failed(reason) => {
+            log::warn!("[traework] 注册表设备标识同步失败: {reason}")
+        }
+    }
+}
+
 /// 切换到指定槽位（完整编排，含预检、回滚与恢复后校验）
 ///
 /// 返回成功恢复的条目数。失败时保证：客户端已按「切换前」或「切换后」的确定状态启动过，
@@ -399,6 +447,11 @@ pub fn switch_to(ctx: &Ctx, slot: &str, sink: &dyn ProgressSink) -> Result<usize
         );
         // 回滚失败就不再叠加错误：原始原因（快照无效）才是用户需要看到的
         if let Ok(n) = snapshot::restore(ctx, LAST_SLOT, sink) {
+            // 回滚必须把设备标识一起退回去：现场已经回到「切换前」，注册表若停在中途那个
+            // 失败目标值上，本地两层标识就互相矛盾——比不写更糟（等于凭空换了设备身份）
+            let rolled_back =
+                device::apply_registry(ctx, LAST_SLOT, sink, &device::SystemRegistry);
+            log_registry_outcome(&rolled_back);
             if let Ok(exe) = locate::find_exe() {
                 let _ = proc::start(&exe, sink);
             }
@@ -415,6 +468,10 @@ pub fn switch_to(ctx: &Ctx, slot: &str, sink: &dyn ProgressSink) -> Result<usize
     }
 
     snapshot::write_current_slot(ctx, slot)?;
+    // 注册表设备标识必须在**启动客户端之前**同步：客户端启动时就会读走该值，
+    // 晚一步写等于这次切换仍然带着上一个账号的设备身份跑起来
+    let registry_outcome = device::apply_registry(ctx, slot, sink, &device::SystemRegistry);
+    log_registry_outcome(&registry_outcome);
     let exe = locate::find_exe()?;
     proc::start(&exe, sink)?;
     Ok(restored)

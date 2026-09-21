@@ -94,6 +94,20 @@ export interface TraeworkSlotStatus {
    */
   expired_at: string | null;
   refresh_expired_at: string | null;
+  /**
+   * 该槽位快照内的设备标识（`machineid` 文件，全量 UUID；展示时取短形）。null = 读不到。
+   *
+   * 「一账号一设备」是否真的成立，看的就是这个值在各槽位间是否互不相同——原来它只是
+   * 一句设计假设，界面上无从验证。
+   */
+  machine_id: string | null;
+  /**
+   * 与本槽位设备标识**相同**的其它账号槽位（空数组 = 已隔离）。
+   *
+   * 非空意味着这些账号在 Trae 看来是同一台设备，正是设备维度限制的成因；
+   * 切到该账号重新「保存当前登录态」即可生成独立标识。
+   */
+  shares_device_with: string[];
 }
 
 /** TraeWork 概览 */
@@ -103,6 +117,10 @@ export interface TraeworkOverview {
   exe_path: string | null;
   snapshots: TraeworkSlotStatus[];
   orphan_slots: string[];
+  /** 现场（客户端正在使用的那一份）的机器标识 */
+  live_machine_id: string | null;
+  /** 系统注册表 `MachineGuid`——设备标识真正被写进去、由客户端读取的那一层 */
+  registry_machine_id: string | null;
 }
 
 /** 单条执行步骤 */
@@ -199,15 +217,16 @@ export interface UsageSummary {
 }
 
 // 签到结果（rate_limited：服务端限流，今日未签到，稍后重试即可；
-// cooldown：账号处于冷却期、本次未尝试，不是错误）
+// cooldown：账号处于冷却期、本次未尝试，不是错误；
+// skipped：TraeWork 账号无可达凭据、本次未尝试，不是失败也没有冷却语义）
 export interface CheckinResult {
   account_id: string;
   account_name: string;
-  state: "ok" | "already" | "rate_limited" | "cooldown" | "failed";
+  state: "ok" | "already" | "rate_limited" | "cooldown" | "skipped" | "failed";
   detail: string;
   /** 冷却截止时刻（UTC 秒）；i64::MAX 会超出 JS 安全整数，判定一律走 cooldown_reason */
   cooldown_until?: number | null;
-  /** 冷却原因码：auth_expired / rate_limited / risk_control / server_error */
+  /** 冷却原因码：auth_expired / rate_limited / risk_control / server_error / credential_stale */
   cooldown_reason?: string | null;
 }
 

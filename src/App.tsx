@@ -15,7 +15,8 @@ import { About } from "./pages/About";
 import { TraeworkPanel } from "./components/TraeworkPanel";
 
 import * as api from "./api";
-import type { Account, AccountBrief, AppSettings, CheckinResult, UsageSummary } from "./types";
+import type { Account, AccountBrief, AppSettings, UsageSummary } from "./types";
+import { describeCooldown, summarizeCheckin } from "./utils/checkinDisplay";
 import "./App.css";
 
 interface AccountWithUsage extends AccountBrief {
@@ -37,38 +38,6 @@ const USAGE_CACHE_KEY = "trae_usage_cache_v1";
  */
 function isTraeworkAccount(account: { app?: string }): boolean {
   return account.app === "traework";
-}
-
-/**
- * 把冷却状态渲染成用户可读文案。
- *
- * 为什么按 reason 而不是按 cooldown_until 数值判定：auth_expired 的 until 是 i64::MAX，
- * 超出 JS 安全整数范围、JSON 反序列化后等值判断不可靠，因此后端契约规定前端只读字符串。
- */
-function describeCooldown(result: CheckinResult): string {
-  const base = (() => {
-    switch (result.cooldown_reason) {
-      case "auth_expired":
-        return "登录状态已失效，需重新登录";
-      case "rate_limited":
-        return "签到人数过多，稍后再试";
-      case "risk_control":
-        return "账号权益不足，暂不可签到";
-      case "server_error":
-        return "服务端暂时不可用，稍后再试";
-      default:
-        return result.detail;
-    }
-  })();
-
-  // 剩余时间只对「有时限」的冷却展示；auth_expired 的 until 是 i64::MAX 哨兵，不参与数值运算
-  if (result.cooldown_reason && result.cooldown_reason !== "auth_expired") {
-    const remainMs = (result.cooldown_until ?? 0) * 1000 - Date.now();
-    if (remainMs > 0) {
-      return `${base}（剩余约 ${Math.max(1, Math.ceil(remainMs / 60000))} 分钟）`;
-    }
-  }
-  return base;
 }
 
 function App() {
@@ -282,8 +251,9 @@ function App() {
       setAccounts(accountsWithUsage);
       setError(null);
       setHasLoaded(true);
-      // TraeWork 账号没有可查额度的凭据（登录态在客户端 vscdb 里），把它们排除在额度拉取之外；
-      // 仍保留在 accounts 里供 TraeWork 面板使用
+      // TraeWork 账号不走这条额度链路：它的凭据在快照的 storage.json 里、要按账号现解，
+      // 与 traecode 读账号库 JWT/Cookies 是两条路（面板自己调 traework_credits）。
+      // 这里仍把它们留在 accounts 里供 TraeWork 面板使用，只是不参与本页的批量刷新
       const usageTargets = list.filter((a) => !isTraeworkAccount(a));
       updateUsageCache({}, usageTargets.map((a) => a.id));
       setLoading(false);
@@ -445,6 +415,9 @@ function App() {
         addToast("success", result.detail);
       } else if (result.state === "already") {
         addToast("info", `${result.account_name} 今日已签到`);
+      } else if (result.state === "skipped") {
+        // skipped 是有理由的跳过（TraeWork 无可达凭据）：不是失败，按 info 展示原因
+        addToast("info", `${result.account_name}：${result.detail}`, 6000);
       } else if (result.state === "cooldown") {
         // 冷却不是错误：本次未尝试，按 info 展示
         addToast("info", `${result.account_name}：${describeCooldown(result)}`, 4000);
@@ -453,8 +426,8 @@ function App() {
       } else {
         addToast("warning", result.detail);
       }
-      // 冷却中未发请求，刷新用量没有意义
-      if (result.state !== "failed" && result.state !== "cooldown") {
+      // 冷却/跳过均未发请求，刷新用量没有意义
+      if (result.state !== "failed" && result.state !== "cooldown" && result.state !== "skipped") {
         await handleRefreshAccount(accountId, { silent: true });
       }
     } catch (err: any) {
@@ -508,21 +481,9 @@ function App() {
           prev.map((a) => (checkedInIds.has(a.id) ? { ...a, checked_in_today: true } : a))
         );
       }
-      const ok = results.filter((r) => r.state === "ok").length;
-      const already = results.filter((r) => r.state === "already").length;
-      const cooldown = results.filter((r) => r.state === "cooldown");
-      const rateLimited = results.filter((r) => r.state === "rate_limited");
-      const failed = results.filter((r) => r.state === "failed");
-      const cooldownNote = cooldown.length > 0 ? `，冷却 ${cooldown.length}` : "";
-      if (failed.length > 0) {
-        const rateNote = rateLimited.length > 0 ? `，限流 ${rateLimited.length}` : "";
-        addToast("warning", `签到完成：成功 ${ok}，已签到 ${already}${cooldownNote}，失败 ${failed.length}${rateNote}（${failed[0].detail}）`, 5000);
-      } else if (rateLimited.length > 0 || cooldown.length > 0) {
-        const first = rateLimited[0] ?? cooldown[0];
-        addToast("warning", `签到完成：成功 ${ok}，已签到 ${already}${cooldownNote}，限流 ${rateLimited.length}（${first.detail}）`, 5000);
-      } else {
-        addToast("success", `签到完成：成功 ${ok}，已签到 ${already}`, 3000);
-      }
+      // 汇总口径下沉到 utils/checkinDisplay（面板侧「全部签到」共用），skipped 单独计数不计失败
+      const summary = summarizeCheckin(results);
+      addToast(summary.level, summary.text, 5000);
       await refreshUsageForAccounts(accounts);
     } catch (err: any) {
       const message: string = err?.message || "批量签到失败";

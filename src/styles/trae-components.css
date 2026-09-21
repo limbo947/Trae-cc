@@ -173,7 +173,8 @@
 }
 
 /* ── 按钮体系 ───────────────────────────────────────────────── */
-/* 主 CTA：实心品牌色，每页最多一个；深色主题下绿底黑字 */
+/* 主 CTA：实心品牌色，每页最多一个；深色主题下绿底黑字
+   （.traework-primary = TraeWork 面板「保存当前登录态」，形态并入本组） */
 .add-btn,
 .quick-register-btn,
 .login-btn,
@@ -182,7 +183,8 @@
 .about-update-btn.primary,
 .update-btn.primary,
 .empty-btn.primary,
-.error-modal-btn.primary {
+.error-modal-btn.primary,
+.traework-primary {
   height: 32px;
   padding: 0 14px;
   border-radius: var(--radius-4);
@@ -207,7 +209,8 @@
 .about-update-btn.primary:hover:not(:disabled),
 .update-btn.primary:hover:not(:disabled),
 .empty-btn.primary:hover,
-.error-modal-btn.primary:hover {
+.error-modal-btn.primary:hover,
+.traework-primary:hover:not(:disabled) {
   transform: none;
   background: var(--bg-brand-hover);
   border-color: var(--bg-brand-hover);
@@ -223,7 +226,8 @@
 
 .add-btn:disabled,
 .quick-register-btn:disabled,
-.login-btn:disabled {
+.login-btn:disabled,
+.traework-primary:disabled {
   background: var(--bg-brand-disabled);
   border-color: transparent;
   color: var(--text-tertiary);
@@ -282,6 +286,15 @@
 .batch-btn.danger,
 .setting-btn.danger {
   color: var(--status-error-default);
+}
+
+/* TraeWork 面板复用 header-btn 形态的破坏性变体：错误色文字 + 错误面 hover */
+.header-btn.danger {
+  color: var(--status-error-default);
+}
+
+.header-btn.danger:hover:not(:disabled) {
+  background: var(--status-error-surface-l1);
 }
 
 .batch-btn.danger:hover,

@@ -1,11 +1,15 @@
-/* TraeWork 面板样式（组件级，遵循「新增样式不再往 App.css 里加」的约定）。
-   全部颜色/圆角/间距走 App.css 定义的 CSS 变量，四套主题自动跟随。 */
+/* TraeWork 面板样式（组件级）。
+   分层约定：组件形态（页标题 / 行 / 徽标 / 按钮 / 浮层卡片）优先复用设计层
+   trae-components.css 的类（page-title / card-status / tag / header-btn / 主 CTA 组），
+   本文件只保留真·面板布局类；颜色/圆角/间距一律走 trae-tokens.css 的语义变量
+   （间距是数值名 --spacer-4/8/12/16/24/32，**没有** xs/sm/md/lg/xl 后缀），不写死色值。
+   注意：App.css 的 .account-list-item 是 TraeCode 列表视图的 8 列 grid，面板行不得复用该类名。 */
 
 .traework-panel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-lg);
-  padding: var(--space-xl);
+  gap: var(--spacer-16);
+  padding: var(--spacer-24);
   overflow-y: auto;
 }
 
@@ -13,34 +17,28 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--space-lg);
-}
-
-.traework-header h2 {
-  margin: 0;
-  font-size: 20px;
-  color: var(--text-primary);
+  gap: var(--spacer-16);
 }
 
 .traework-subtitle {
-  margin: var(--space-xs) 0 0;
+  margin: var(--spacer-4) 0 0;
   color: var(--text-muted);
   font-size: 13px;
   line-height: 1.6;
   max-width: 640px;
 }
 
+/* 容器对齐 .account-card：radius-8、spacer-16 内边距、neutral-l1 边框（tokens 收敛后无阴影） */
 .traework-card,
 .traework-list,
 .traework-steps {
-  background: var(--bg-card);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  padding: var(--space-lg);
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  padding: var(--spacer-16);
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: var(--spacer-12);
 }
 
 .traework-list h3,
@@ -53,7 +51,7 @@
 .traework-row {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--spacer-12);
   flex-wrap: wrap;
   font-size: 13px;
 }
@@ -79,61 +77,23 @@
   font-size: 12.5px;
 }
 
-.traework-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  background: var(--accent-bg);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.traework-tag.ok {
-  background: var(--success-bg);
-  color: var(--success);
-}
-
-.traework-tag.danger {
-  background: var(--danger-bg);
-  color: var(--danger);
-}
-
-/* 凭据即将失效：能用但需要关注，故与 danger（已失效）区分 */
-.traework-tag.warn {
-  background: var(--warning-bg);
-  color: var(--warning);
+/* 信息类徽标（积分 / 体积 / 可回退代）复用设计层 .tag 形态；
+   面板侧只补「积分数值用等宽」这一项——多个账号纵向扫下来位数能对齐 */
+.tag.credits {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
 .traework-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--spacer-8);
   flex-wrap: wrap;
 }
 
+/* 主 CTA 的形态（尺寸/颜色/hover/disabled）由设计层主按钮规则组提供
+   （.traework-primary 已并入该组），这里只保留它在面板里的布局位置 */
 .traework-primary {
   align-self: flex-start;
-  padding: 9px 18px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--gradient-accent);
-  color: var(--text-inverse);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: opacity var(--transition-fast);
-}
-
-.traework-primary:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.traework-primary:disabled,
-.traework-mini-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .traework-hint {
@@ -149,28 +109,47 @@
   font-size: 13px;
 }
 
+/* 行去盒化：与设计层 .account-list-item 同视觉口径——无独立底色、border-bottom
+   分隔、hover 半透明面。**刻意不复用该类名**：App.css 里的 .account-list-item 是
+   TraeCode 列表视图专用的 8 列 grid（display:grid + grid-template-columns），
+   挂上来会把整行塞进 40px 的列（2026-09-20 实测翻车） */
 .traework-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-md);
-  padding: var(--space-md);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  gap: var(--spacer-12);
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-neutral-l1);
+  font-size: 12px;
+}
+
+.traework-item:hover {
+  background: var(--bg-overlay-l1);
+}
+
+/* 容器内的末行不画分隔线（与 TraeCode 账号列表一致） */
+.traework-list .traework-item:last-of-type {
+  border-bottom: none;
+}
+
+/* 徽标不折行：设计层 .tag / .card-status 未设 nowrap（TraeCode 侧内容短用不到），
+   面板的「积分 483 / 6100」这类带空格文案会竖排折行 */
+.traework-item-title .tag,
+.traework-item-title .card-status {
+  white-space: nowrap;
 }
 
 .traework-item-main {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
+  gap: var(--spacer-4);
   min-width: 0;
 }
 
 .traework-item-title {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--spacer-8);
   flex-wrap: wrap;
   color: var(--text-primary);
 }
@@ -189,33 +168,13 @@
 
 .traework-item-actions {
   display: flex;
-  gap: var(--space-sm);
+  gap: var(--spacer-8);
   flex: 0 0 auto;
-}
-
-.traework-mini-btn {
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  color: var(--text-primary);
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background var(--transition-fast);
-}
-
-.traework-mini-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-.traework-mini-btn.danger {
-  color: var(--danger);
-  border-color: var(--danger-light, var(--border));
 }
 
 .traework-step {
   display: flex;
-  gap: var(--space-md);
+  gap: var(--spacer-12);
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--text-secondary);
@@ -240,7 +199,9 @@
   color: var(--success);
 }
 
-/* 进行中遮罩：动作会阻塞数十秒，遮罩同时承担「防重复点击」与「告知别手动开客户端」两个职责 */
+/* 进行中遮罩：动作会阻塞数十秒，遮罩同时承担「防重复点击」与「告知别手动开客户端」
+   两个职责。语义对齐 .modal-overlay（--scrim 半透明、无 blur）；z-index 60 高于
+   .app-main、低于 Toast 容器（9999）——签到失败等提示必须能浮在遮罩之上 */
 .traework-overlay {
   position: fixed;
   inset: 0;
@@ -248,20 +209,21 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--glass-bg);
-  backdrop-filter: blur(6px);
+  background: var(--scrim);
 }
 
+/* 浮层卡片对齐 .modal-content（trae-overlays.css 口径）：base-secondary 面、
+   radius-8、neutral-l2 边框、shadow-lg */
 .traework-overlay-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--spacer-8);
   max-width: 420px;
-  padding: var(--space-xl);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  padding: var(--spacer-16);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  background: var(--bg-base-secondary);
   box-shadow: var(--shadow-lg);
   text-align: center;
 }
@@ -279,7 +241,7 @@
 .traework-spinner {
   width: 28px;
   height: 28px;
-  border: 3px solid var(--border);
+  border: 3px solid var(--border-neutral-l2);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: traework-spin 0.9s linear infinite;

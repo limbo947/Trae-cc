@@ -687,10 +687,8 @@ pub fn switch_trae_account(info: &TraeLoginInfo, machine_id: Option<&str>, auto_
         .map_err(|e| anyhow!("创建目录失败: {}", e))?;
     let storage_path = storage_dir.join("storage.json");
 
-    // 生成新的 telemetry ID
-    let new_dev_device_id = Uuid::new_v4().to_string();
-    let new_sqm_id = format!("{{{}}}", Uuid::new_v4().to_string().to_uppercase());
-    let new_telemetry_machine_id = generate_telemetry_machine_id(&new_machine_id);
+    // 生成新的 telemetry ID（规则见 `telemetry_ids`）
+    let (new_telemetry_machine_id, new_dev_device_id, new_sqm_id) = telemetry_ids(&new_machine_id);
 
     // 读取现有配置或创建新的
     let mut json: serde_json::Value = if storage_path.exists() {
@@ -756,11 +754,8 @@ pub fn clear_trae_login_state() -> Result<()> {
         .map_err(|e| anyhow!("重置 Trae 机器码失败: {}", e))?;
     println!("[INFO] 已重置 Trae 机器码: {}", new_machine_id);
 
-    // 2. 生成新的 telemetry ID
-    let new_dev_device_id = Uuid::new_v4().to_string();
-    let new_sqm_id = format!("{{{}}}", Uuid::new_v4().to_string().to_uppercase());
-    // machineId 是 machineid 文件的哈希（64位十六进制字符串）
-    let new_telemetry_machine_id = generate_telemetry_machine_id(&new_machine_id);
+    // 2. 生成新的 telemetry ID（规则见 `telemetry_ids`）
+    let (new_telemetry_machine_id, new_dev_device_id, new_sqm_id) = telemetry_ids(&new_machine_id);
 
     // 3. 更新 storage.json 中的登录信息和 telemetry ID
     let storage_path = trae_path.join("User").join("globalStorage").join("storage.json");
@@ -843,6 +838,18 @@ pub fn clear_trae_login_state() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// 生成一套 telemetry 标识：`(telemetry.machineId, telemetry.devDeviceId, telemetry.sqmId)`
+///
+/// 为什么必须抽成唯一入口：这套三元组的**形状**（machineId 是 machineid 的 sha256、sqmId 带
+/// 花括号且全大写）是客户端识别「同一台设备」的依据，traecode 的切换与清登、TraeWork 的设备
+/// 标识归一三处都要用它。规则一旦分叉（例如只在一处漏了 sqmId 的大括号），两次改写就会产出
+/// 不同形状的值，问题表现为「同一个账号时而像新设备时而像旧设备」，极难归因。
+pub(crate) fn telemetry_ids(machine_id: &str) -> (String, String, String) {
+    let dev_device_id = Uuid::new_v4().to_string();
+    let sqm_id = format!("{{{}}}", Uuid::new_v4().to_string().to_uppercase());
+    (generate_telemetry_machine_id(machine_id), dev_device_id, sqm_id)
 }
 
 /// 生成 telemetry.machineId（64位十六进制字符串）

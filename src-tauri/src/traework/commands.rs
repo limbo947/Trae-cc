@@ -15,9 +15,11 @@
 use tauri::State;
 
 use super::profile::Ctx;
-use super::{locate, proc, snapshot, uid, StepCollector, StepLog};
+use super::device::RegistryAccess;
+use super::{credentials, device, locate, proc, snapshot, uid, StepCollector, StepLog};
 use super::{reconcile, save_current_login, switch_to, ReconcileReport, SaveOutcome};
 use crate::account::{AccountBrief, APP_TRAEWORK};
+use crate::api::{TraeApiClient, UsageSummary};
 use crate::{ApiError, AppState};
 
 /// 构造 `ApiError`（`ApiError::from` 只吃 `anyhow::Error`，本模块的错误都是面向用户的
@@ -51,6 +53,14 @@ pub struct TraeworkOverview {
     pub snapshots: Vec<snapshot::SlotStatus>,
     /// 磁盘上有快照但账号库里没有对应账号的孤儿槽（导出/删除账号后可能残留）
     pub orphan_slots: Vec<String>,
+    /// 现场（客户端正在使用的那一份）当前的机器标识
+    ///
+    /// 为什么与槽位里的值分开列出：设备标识的隔离是否生效，要靠「注册表 / 现场 / 各槽位」
+    /// 三者对照才能看出来（2026-09-21 实测就是靠这三者发现多个账号撞号的）。只给槽位值，
+    /// 用户无从判断「现在跑的这个到底是哪台设备」。
+    pub live_machine_id: Option<String>,
+    /// 系统注册表 `MachineGuid`——设备标识真正被写进去、由客户端读取的那一层
+    pub registry_machine_id: Option<String>,
 }
 
 /// 槽位状态 + 快照内的凭据到期时间
@@ -66,6 +76,12 @@ fn slot_status_with_credential(ctx: &Ctx, slot: &str) -> snapshot::SlotStatus {
     if let Some(profile) = uid::slot_profile(ctx, slot) {
         status.expired_at = profile.expired_at;
         status.refresh_expired_at = profile.refresh_expired_at;
+    }
+    status.machine_id = device::read_fingerprint(ctx, slot).machine_id;
+    // 保留槽（切换前现场的滚动备份）不参与撞号判定：它的内容按设计就装着某个账号的快照，
+    // 算进来会让那个账号恒显示「与 last 共用设备标识」这种无意义告警，把真问题淹掉
+    if !snapshot::is_reserved_slot(slot) {
+        status.shares_device_with = device::clashes(ctx, slot);
     }
     status
 }
@@ -105,6 +121,10 @@ pub async fn traework_overview(state: State<'_, AppState>) -> Result<TraeworkOve
             exe_path: locate::find_exe().ok().map(|p| p.to_string_lossy().to_string()),
             snapshots,
             orphan_slots,
+            live_machine_id: device::read_live_fingerprint(&ctx).machine_id,
+            // 读注册表失败（权限/策略）不该让整个概览失败：这一格退化为「未知」即可，
+            // 否则用户连快照列表都看不到
+            registry_machine_id: device::SystemRegistry.get().ok(),
         })
     })
     .await
@@ -124,6 +144,53 @@ pub async fn traework_discover() -> Result<uid::UidEvidence, ApiError> {
     .map_err(err)
 }
 
+/// TraeWork 账号的积分余额（面板上显示「剩余 / 总额」）
+///
+/// 为什么不复用 traecode 的 `get_account_usage`：那条链路读账号库里的 JWT / Cookies，而
+/// TraeWork 账号在账号库里**没有**凭据（`jwt_token` 与 `cookies` 恒为空），必须现场从
+/// `storage.json` 解出 token。两条链路只在最下层的解析（`cn_credits`）汇合。
+///
+/// 为什么「当前账号」要读实时现场而不是快照：客户端启动时会用快照里的 refreshToken 换发
+/// 新凭据并写回**现场**，快照文件不会跟着更新——对它读快照只会拿到一份必然过期的旧 token，
+/// 表现为「刚切过去的账号查积分却报凭据失效」。
+#[tauri::command]
+pub async fn traework_credits(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> Result<UsageSummary, ApiError> {
+    let slot = {
+        let manager = state.account_manager.lock().await;
+        let account = manager.get_account(&account_id).map_err(ApiError::from)?;
+        if account.app != APP_TRAEWORK {
+            return Err(err("该账号不是 TraeWork 账号，无法查询积分"));
+        }
+        account
+            .slot()
+            .map(|s| s.to_string())
+            .ok_or_else(|| err("该 TraeWork 账号缺少 uid，无法定位快照"))?
+    };
+
+    // 文件读取放到锁外（全仓「不持锁做 IO」的纪律）
+    let slot_for_task = slot.clone();
+    let token = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let ctx = Ctx::from_env()?;
+        // 凭据优先级（当前槽读现场 → 主槽 → .bak）收敛进 credentials 模块：
+        // 积分与签到共用一份解析，防止两处实现漂移（详见 credentials.rs 头注）
+        credentials::resolve_token(&ctx, &slot_for_task)
+    })
+    .await
+    .map_err(|e| err(format!("读取 TraeWork 凭据异常: {e}")))?
+    .map_err(err)?;
+
+    let client = TraeApiClient::new_with_token(&token)
+        .map_err(|e| err(format!("创建积分查询客户端失败: {e}")))?;
+    client.get_usage_summary_by_token().await.map_err(|e| {
+        err(format!(
+            "积分查询失败：{e}。若为鉴权失败，说明该槽位的凭据已过期，请切换到 {slot} 并重新「保存当前登录态」"
+        ))
+    })
+}
+
 /// 保存当前登录态到快照，并把账号登记到账号库
 ///
 /// 为什么保存成功后才登记账号：登记意味着前端会出现一条可切换的记录。若先登记后保存，
@@ -141,23 +208,40 @@ pub async fn traework_save_current_login(
     // 显式传入的名字优先（当前前端不传，保留给将来的重命名入口）
     let explicit_name = name.filter(|n| !n.trim().is_empty());
 
+    // 槽位必须在查账号库之前定下来：设备标识是**按 user_id（= 槽位名）取**的。
+    // 识别只读几 KB 文件，与后面那步同一纪律放进阻塞池
+    let slot = match explicit {
+        Some(u) => u,
+        None => tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+            let ctx = Ctx::from_env()?;
+            let evidence = uid::discover(&ctx);
+            if !evidence.confident {
+                return Err(evidence.reason);
+            }
+            evidence
+                .uid
+                .ok_or_else(|| "未识别到 TraeWork 登录账号".to_string())
+        })
+        .await
+        .map_err(|e| err(format!("TraeWork 账号识别异常: {e}")))?
+        .map_err(err)?,
+    };
+
+    // 设备标识目标值：按 user_id 跨应用共享（TraeCode 与 TraeWork 对同一真实账号必须表现为
+    // 同一台设备，见 `AccountManager::shared_machine_id`）。短锁取值后立即释放——不持锁做
+    // 文件操作是全仓纪律
+    let shared_machine_id = {
+        let manager = state.account_manager.lock().await;
+        manager.shared_machine_id(&slot)
+    };
+
+    let slot_for_task = slot.clone();
     let (outcome, steps) = tauri::async_runtime::spawn_blocking(
         move || -> Result<(SaveOutcome, Vec<StepLog>), String> {
             let ctx = Ctx::from_env()?;
-            let slot = match explicit {
-                Some(u) => u,
-                None => {
-                    let evidence = uid::discover(&ctx);
-                    if !evidence.confident {
-                        return Err(evidence.reason);
-                    }
-                    evidence
-                        .uid
-                        .ok_or_else(|| "未识别到 TraeWork 登录账号".to_string())?
-                }
-            };
             let sink = StepCollector::new();
-            let outcome = save_current_login(&ctx, &slot, &sink)?;
+            let outcome =
+                save_current_login(&ctx, &slot_for_task, &sink, Some(&shared_machine_id))?;
             Ok((outcome, sink.steps()))
         },
     )
@@ -180,8 +264,29 @@ pub async fn traework_save_current_login(
         AccountBrief::from_account(&account, false)
     };
 
+    // 归一结果要出现在**用户可见**的文案里：这是「隔离到底有没有生效」的唯一即时反馈。
+    // 只写日志的话，用户得去翻 app.log 才能确认，等于没验证
+    let device_note = match &outcome.device {
+        device::NormalizeOutcome::Realigned {
+            previous_machine_id,
+            reason,
+        } => {
+            // 把改动前的值一并给出：用户可据此与「面板上的旧指纹」对上，确认这次改的确实是
+            // 那个值，而不是碰巧重算了一次
+            let prev = previous_machine_id
+                .as_deref()
+                .map(device::short)
+                .unwrap_or_else(|| "未知".to_string());
+            format!("；设备标识已调整（原值 {prev}）：{reason}")
+        }
+        _ => String::new(),
+    };
+
     Ok(TraeworkActionResult {
-        message: format!("已保存账号 {slot} 的登录态（{} 项）", outcome.copied),
+        message: format!(
+            "已保存账号 {slot} 的登录态（{} 项）{device_note}",
+            outcome.copied
+        ),
         steps,
         account: Some(brief),
     })

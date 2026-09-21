@@ -21,6 +21,9 @@ pub const REASON_AUTH_EXPIRED: &str = "auth_expired";
 pub const REASON_RATE_LIMITED: &str = "rate_limited";
 pub const REASON_RISK_CONTROL: &str = "risk_control";
 pub const REASON_SERVER_ERROR: &str = "server_error";
+/// TraeWork 专属：快照凭据已失效（该账号没有 Cookies 刷新链路，人工介入是
+/// 「切过去 + 保存当前登录态」，该动作即清除入口）
+pub const REASON_CREDENTIAL_STALE: &str = "credential_stale";
 
 /// 进程级签到互斥锁
 ///
@@ -59,6 +62,9 @@ pub enum CooldownTrigger {
     EntitlementDenied,
     /// 401 / 1001 Token 失效
     AuthExpired,
+    /// TraeWork 快照凭据失效：本工具没有该账号的刷新链路（refreshToken 续期端点
+    /// 未找到），唯一自救是用户「切过去 + 保存当前登录态」——冷却必须能被那个动作清掉
+    CredentialStale,
 }
 
 impl CooldownTrigger {
@@ -68,6 +74,7 @@ impl CooldownTrigger {
             Self::Http404 | Self::Transient => REASON_SERVER_ERROR,
             Self::EntitlementDenied => REASON_RISK_CONTROL,
             Self::AuthExpired => REASON_AUTH_EXPIRED,
+            Self::CredentialStale => REASON_CREDENTIAL_STALE,
         }
     }
 
@@ -78,6 +85,9 @@ impl CooldownTrigger {
             Self::Transient => 2 * 60,
             Self::EntitlementDenied => 12 * 3600,
             Self::AuthExpired => i64::MAX,
+            // 与 EntitlementDenied 同级：access 过期后本工具无法续期，短冷却只会让
+            // 批次反复白打请求；12h 与「等用户下次想起来切换」的节奏相符，且被钳到当日边界
+            Self::CredentialStale => 12 * 3600,
         }
     }
 
@@ -142,18 +152,27 @@ pub fn is_cooling_down(account: &Account) -> Option<i64> {
     (until > chrono::Utc::now().timestamp()).then_some(until)
 }
 
-/// 清除 `auth_expired` 冷却（Token 刷新 / 重新登录 / 编辑账号后调用）
+/// 清除指定原因的冷却；返回是否发生变更，供调用方决定是否落盘
 ///
-/// 仅清该 reason：刷新 Token 不该解除 9074 限流冷却。返回是否发生变更，供调用方决定落盘。
-pub fn clear_auth_cooldown(account: &mut Account) -> bool {
-    let is_auth_expired = account
+/// 为什么泛化出 reason 参数：TraeWork 的 `credential_stale` 需要挂在「保存当前登录态」
+/// 上清除，而 Token 刷新只该清 `auth_expired`——各入口自带语义，按 reason 精确清除
+/// 才不会出现「保存登录态顺手解除了 9074 限流」这类越权。
+pub fn clear_cooldown_reason(account: &mut Account, reason: &str) -> bool {
+    let matched = account
         .checkin_cooldown
         .as_ref()
-        .is_some_and(|c| c.reason == REASON_AUTH_EXPIRED);
-    if is_auth_expired {
+        .is_some_and(|c| c.reason == reason);
+    if matched {
         account.checkin_cooldown = None;
     }
-    is_auth_expired
+    matched
+}
+
+/// 清除 `auth_expired` 冷却（Token 刷新 / 重新登录 / 编辑账号后调用）
+///
+/// 仅清该 reason：刷新 Token 不该解除 9074 限流冷却。保留为薄包装以维持既有调用点。
+pub fn clear_auth_cooldown(account: &mut Account) -> bool {
+    clear_cooldown_reason(account, REASON_AUTH_EXPIRED)
 }
 
 #[cfg(test)]
@@ -197,7 +216,7 @@ mod tests {
         assert!(is_cooling_down(&account).is_none());
     }
 
-    /// 策略表：9074 十分钟、HTTP 429 六十秒、1005 十二小时、401 哨兵
+    /// 策略表：9074 十分钟、HTTP 429 六十秒、1005 十二小时、401 哨兵、credential_stale 十二小时
     #[test]
     fn policy_table_matches_plan() {
         assert_eq!(CooldownTrigger::RateLimited.duration_secs(), 600);
@@ -205,10 +224,16 @@ mod tests {
         assert_eq!(CooldownTrigger::Http404.duration_secs(), 60);
         assert_eq!(CooldownTrigger::Transient.duration_secs(), 120);
         assert_eq!(CooldownTrigger::EntitlementDenied.duration_secs(), 12 * 3600);
+        assert_eq!(CooldownTrigger::CredentialStale.duration_secs(), 12 * 3600);
         assert_eq!(CooldownTrigger::Http429.reason(), REASON_RATE_LIMITED);
         assert_eq!(CooldownTrigger::Http404.reason(), REASON_SERVER_ERROR);
+        assert_eq!(CooldownTrigger::CredentialStale.reason(), REASON_CREDENTIAL_STALE);
         assert!(CooldownTrigger::RateLimited.retryable());
         assert!(!CooldownTrigger::EntitlementDenied.retryable());
+        // TraeWork 凭据失效不可重试：本工具没有刷新链路，批次内重试必然白打
+        assert!(!CooldownTrigger::CredentialStale.retryable());
+        // 12h 冷却必须被钳到当日 23:59:59，而不是真的压上 12 小时
+        assert_ne!(cooldown_for(CooldownTrigger::CredentialStale).until, i64::MAX);
     }
 
     /// 刷新 Token 只清 auth_expired，限流冷却必须保留
@@ -228,6 +253,28 @@ mod tests {
         });
         assert!(!clear_auth_cooldown(&mut account));
         assert!(account.checkin_cooldown.is_some());
+    }
+
+    /// 泛化清除必须精确按 reason 命中：「保存登录态」清 credential_stale 时
+    /// 不得顺手解掉 auth_expired 哨兵（那会让需人工介入的账号被静默放行）
+    #[test]
+    fn clear_cooldown_reason_only_touches_matching_reason() {
+        let mut account = test_account();
+        account.checkin_cooldown = Some(CheckinCooldown {
+            until: chrono::Utc::now().timestamp() + 600,
+            reason: REASON_CREDENTIAL_STALE.to_string(),
+        });
+        assert!(clear_cooldown_reason(&mut account, REASON_CREDENTIAL_STALE));
+        assert!(account.checkin_cooldown.is_none());
+
+        account.checkin_cooldown = Some(CheckinCooldown {
+            until: i64::MAX,
+            reason: REASON_AUTH_EXPIRED.to_string(),
+        });
+        assert!(!clear_cooldown_reason(&mut account, REASON_CREDENTIAL_STALE));
+        assert!(account.checkin_cooldown.is_some(), "哨兵不得被别的 reason 的清除动作碰掉");
+        assert!(clear_cooldown_reason(&mut account, REASON_AUTH_EXPIRED));
+        assert!(account.checkin_cooldown.is_none());
     }
 
     fn test_account() -> Account {

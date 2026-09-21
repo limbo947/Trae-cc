@@ -20,7 +20,12 @@ pub struct Account {
     pub created_at: i64,
     pub updated_at: i64,
     pub is_active: bool,
-    /// 账号关联的机器码
+    /// 设备标识（机器码）：**以 `user_id` 为键跨应用共享**，取值见 `AccountManager::shared_machine_id`
+    ///
+    /// 为什么不按记录（app）分配：同一真实账号在库里是两条记录（traecode / traework），而官方口径
+    /// 「同一台电脑同时登录 TraeCode 和 TraeWork 只算 1 台设备」要求两者呈现**同一台设备**；
+    /// 按记录分配会让同一账号以两台设备出现在服务端（账号级风控的成因方向）；而不同 `user_id`
+    /// 之间仍必须互不相同（设备级限制「该设备绑定的账户数量已达上限」的成因方向）。
     #[serde(default)]
     pub machine_id: Option<String>,
     /// 签到设备号（`X-Device-Id`），与 `machine_id` 彻底解耦：重置设备号不碰 IDE 机器身份
@@ -68,6 +73,17 @@ fn default_app() -> String {
 pub const APP_TRAECODE: &str = "traecode";
 /// TraeWork（TRAE SOLO CN）应用标识
 pub const APP_TRAEWORK: &str = "traework";
+
+/// TraeWork 签到设备号的派生种子（app 域前缀）
+///
+/// 为什么加前缀：traecode 侧的种子是裸 `user_id`，而「traecode 的 `user_id` 与 TraeWork 的
+/// `uid` 是否同一数值域」是未验证事实——若同域，两条记录会撞同一设备号，第二条被服务端
+/// 设备去重报 9095「本设备今日已签到」（文案误导）。加前缀把这件事变成结构性保证。
+/// 同一真实账号的两条记录因此拿到两个设备号，第二次 claim 由账号级去重挡成 `already`，
+/// 代价仅一次无副作用的白请求。派生与落盘点共用本函数，保证种子唯一。
+pub fn traework_device_seed(uid: &str) -> String {
+    format!("{APP_TRAEWORK}:{uid}")
+}
 
 /// 签到冷却状态
 ///
@@ -156,9 +172,10 @@ impl Account {
             created_at: now,
             updated_at: now,
             is_active: true,
-            // TraeWork 的机器身份随快照走（machineid 在快照白名单内），
-            // 这里不再单独生成，避免出现「账号库里的 machine_id 与快照里的实际值不一致」
-            // 这种无法自洽的第二真源
+            // 设备标识刻意留空，让**分配点唯一化**：由 `AccountManager::upsert_traework_account`
+            // 与启动回填按 `user_id` 统一分配（见 `machine_id` 字段注释）。这里若自行生成一个随机值，
+            // 就会与同 `user_id` 的 traecode 记录不一致——同一账号在两处各持一套设备标识，
+            // 正是 2026-09-21 账号级风控的成因方向
             machine_id: None,
             device_id: None,
             last_checkin_date: None,
