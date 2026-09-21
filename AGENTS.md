@@ -5,9 +5,9 @@
 
 ## 1. 项目速览
 
-- **名称**：Trae账号管理（应用标识 `com.hhj.trae-cc`），当前版本 **1.0.5**（三处同步：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`）
-- **定位**：Windows 桌面工具，管理多个 Trae 账号——**TraeCode（Trae CN）** 侧：账号存储、一键切换（改写 IDE 登录态与机器码）、用量查询/统计图表、每日签到（手动 + 开机自动）、机器码管理、隐私模式写入；**TraeWork（TRAE SOLO CN）** 侧：登录态快照 / 恢复式切换（2026-09 新增，见 §5.9）
-- **架构**：Tauri 2 应用 = React 19 前端（`src/`）+ Rust 后端（`src-tauri/src/`）。前后端仅通过 `#[tauri::command]` 通信，共注册 **58 个命令**（本地 49 + TraeWork 9；TraeWork 命令定义在 `src-tauri/src/traework/commands.rs`，注册仍在 lib.rs）；前端统一走 `src/api.ts` 的 invoke 封装
+- **名称**：Trae账号管理（应用标识 `com.hhj.trae-cc`），当前版本 **1.0.6**（三处同步：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`）
+- **定位**：Windows 桌面工具，管理多个 Trae 账号——**TraeCode（Trae CN）** 侧：账号存储、一键切换（改写 IDE 登录态与机器码）、用量查询/统计图表、每日签到（手动 + 开机自动）、机器码管理、隐私模式写入；**TraeWork（TRAE SOLO CN）** 侧：登录态快照 / 恢复式切换、每日签到（手动 + 自动，凭据走快照解析）（2026-09 新增，见 §5.9）
+- **架构**：Tauri 2 应用 = React 19 前端（`src/`）+ Rust 后端（`src-tauri/src/`）。前后端仅通过 `#[tauri::command]` 通信，共注册 **60 个命令**（本地 50 + TraeWork 10；TraeWork 命令定义在 `src-tauri/src/traework/commands.rs`，注册仍在 lib.rs）；前端统一走 `src/api.ts` 的 invoke 封装
 - **目标平台**：仅 Windows 10/11 为完整实现（大量 `cfg(windows)` 分支）。例外：`autostart.rs` 的 macOS 分支是真实实现（LaunchAgents），其余 macOS/Linux 代码仅为可编译桩
 
 ## 2. 技术栈与关键依赖
@@ -29,7 +29,7 @@ npm run tauri build        # 生产构建（先 tsc && vite build，再 cargo bu
 
 - **构建期环境变量注入**：`src-tauri/build.rs` 会从当前目录起向上递归查找 `.env`，逐行输出 `cargo:rustc-env`（Rust 侧用 `option_env!` 读取，前端经 Vite 读取）。随快速注册功能删除，该机制目前没有任何消费方，保留仅为后续需要编译期注入时备用。
 - `tauri.conf.json` 中 `bundle.active = false`：默认构建不产出安装包，需要时临时开启，**勿提交开启状态**。
-- 无 lint 配置；根目录的 `check_quota*.mjs/.py` 是手动调试脚本，不是测试套件。Rust 侧有 `#[cfg(test)]` 单元测试（`device_id` / `checkin_guard` / `device_reset` / `tc_crypto` / `traework::*`），用 `cargo test --lib` 运行（2026-09-20 实测 47 个全绿）。TraeWork 侧覆盖：槽位名路径穿越拒绝、进程名白名单、快照往返（边车清除 + 对称恢复）、`.bak` 轮转与回退、uid 证据链与并列时拒绝识别、当前账号标记 BOM 剥离。
+- 无 lint 配置；根目录的 `check_quota*.mjs/.py` 是手动调试脚本，不是测试套件。Rust 侧有 `#[cfg(test)]` 单元测试（`device_id` / `checkin_guard` / `checkin` / `account_manager` / `device_reset` / `tc_crypto` / `traework::*`），用 `cargo test --lib` 运行（2026-09-20 实测 56 个全绿）。TraeWork 侧覆盖：槽位名路径穿越拒绝、进程名白名单、快照往返（边车清除 + 对称恢复）、`.bak` 轮转与回退、uid 证据链与并列时拒绝识别、当前账号标记 BOM 剥离、凭据解析三优先级、签到 app 分派（skipped 不落盘）与 `credential_stale` 冷却。
 - 修改注册表 MachineGuid 需管理员权限，调试相关功能时请以管理员身份运行（非管理员时写入静默失败，见 5.2）。
 - **构建必须走 Tauri CLI，不要用裸 `cargo build --release`**：裸 cargo 拿不到 CLI 注入的环境变量，产出的是「开发模式」二进制——运行时去连 Vite 开发服务器 `localhost:1420` 而非加载内嵌前端，界面报 `ERR_CONNECTION_REFUSED`「无法访问此页面」。识别特征：体积少约 0.37MB（正是内嵌前端资源大小），且应用日志停在 `Initializing account manager...` 之后无任何记录（前端未加载）。正确产物约 **7.62MB**（2026-09-20 加入 TraeWork 槽位修复后实测值；此前 7.59MB 为 TraeWork 初版、7.49MB 为移除快速注册时的值；随功能增减会变，判断标准是「是否少了约 0.37MB」而非绝对值）。另注意 `tauri build` 会出现 `#[warn(linker_messages)]`（MSVC `link.exe` 的「正在创建库 …dll.lib 和对象 ….exp」经 stdout 被当警告），**非错误**，`cargo check` 为零警告不代表构建有问题。
 - 链接阶段偶发失败（`link.exe` 退出码 `0xc0000142`，DLL 初始化失败，多见于系统资源紧张或杀软干扰）时，库本身已编译成功，直接重跑同一条构建命令即可通过。
@@ -52,8 +52,8 @@ trae-cc/
 │   ├── build.rs                # 向上递归查找 .env，输出 cargo:rustc-env 注入编译期变量（当前无消费方）
 │   ├── src/lib.rs              # 应用入口：49 个本地命令 + AppState + 浏览器登录/open_pricing 注入脚本（⚠ 有效约 1500 行，
 │   │                           #   其中 build_browser_login_script 的 JS 字符串约 480 行，勿再继续膨胀）
-│   ├── src/traework/           # TraeWork（TRAE SOLO CN）账号切换：profile（常量+白名单 15 项）/snapshot（备份恢复原语+对称恢复）/proc（三级关闭）/locate（exe 五级发现）/uid（证据链+置信度门槛）/commands（9 个命令）
-│   ├── src/account/            # 账号域：account_manager.rs（CRUD/切换/刷新/签到落盘，⚠ 有效 1160 行）、types.rs
+│   ├── src/traework/           # TraeWork（TRAE SOLO CN）账号切换：profile（常量+快照白名单 21 项）/snapshot（备份恢复原语+对称恢复）/device（设备标识归一+注册表同步）/proc（三级关闭）/locate（exe 五级发现）/uid（证据链+置信度门槛+接口凭据）/credentials（凭据解析优先级）/commands（10 个命令）
+│   ├── src/account/            # 账号域：account_manager.rs（CRUD/切换/刷新/签到落盘，⚠ 有效 1400 行）、device_identity.rs（设备标识的 user_id 级归属规则）、types.rs
 │   ├── src/api/                # Trae API 客户端：trae_api.rs（双认证 + 多端点回退，有效 784 行，临近上限）、cn_credits.rs（CN 积分钟额度查询/解析 + 通用/Work 拆分）、checkin.rs（每日签到：状态/领取 + 判定 + 冷却准入 + 重试轮次）、checkin_guard.rs（冷却策略表 + 防重入）、device_id.rs（签到设备号派生/脱敏）、types.rs
 │   ├── src/machine.rs          # 机器码（注册表 MachineGuid）、Trae 路径扫描、进程 kill/open、写 storage.json（有效 665 行）
 │   ├── src/device_reset.rs     # aha 层设备标识重置（aha/TinyStorage 的 aha.device.device_id，原子写回）
@@ -69,17 +69,34 @@ trae-cc/
 |---|---|---|
 | src/App.css | 约 4240 | ⚠ 严重超限 |
 | src-tauri/src/lib.rs | 约 1500 | ⚠ 超限 |
-| src-tauri/src/account/account_manager.rs | 1160 | ⚠ 超限 |
+| src-tauri/src/account/account_manager.rs | 1400 | ⚠ 超限（2026-09-21 复核；同日已把设备标识规则拆出到 device_identity.rs） |
+| src-tauri/src/account/device_identity.rs | 145 | 2026-09-21 新增：设备标识的**归属规则**（`user_id` 键 / 稳定派生 / 跨应用对齐），纯函数 + 单测 |
 | src/App.tsx | 约 1030 | ⚠ 超限（TraeWork 面板已拆成独立组件，勿再往此文件加页面逻辑） |
 | src-tauri/src/api/trae_api.rs | 784 | 临近上限 |
 | src/components/DashboardWidgets.tsx | 695 | 临近上限 |
 | src-tauri/src/machine.rs | 665 | 尚可，但总行数 910 偏大 |
 | src/components/DetailModal.tsx | 约 530 | 观察名单 |
 | src/pages/settings/（Settings 容器 + 7 个分区组件 + shared.ts） | 容器约 130，其余 55–260 | 2026-09-20 从单文件 Settings.tsx（641 行）拆出，均已低于上限 |
-| src-tauri/src/api/checkin.rs | 490 | 尚可（含新增冷却/重试轮次） |
-| src-tauri/src/api/checkin_guard.rs / device_id.rs / device_reset.rs | 158 / 95 / 73 | 新增模块（含单元测试） |
-| src-tauri/src/traework/snapshot.rs | 517 | 新增，含备份/恢复/对称清理/轮转/校验 + 归位改名 + 按白名单瘦身 |
-| src-tauri/src/traework/mod.rs / uid.rs / commands.rs / proc.rs / profile.rs / locate.rs | 258 / 248 / 228 / 167 / 163 / 148 | 新增模块，均远低于上限 |
+| src-tauri/src/api/checkin.rs | 617 | 临近上限（含 TraeWork 凭据分派与 skipped 语义；再增需拆 checkin/ 子模块） |
+| src-tauri/src/api/checkin_guard.rs / device_id.rs / device_reset.rs | 187 / 95 / 73 | 含单元测试 |
+| src-tauri/src/traework/snapshot.rs | 571 | 含备份/恢复/对称清理/轮转/校验 + 归位改名 + 按白名单瘦身 |
+| src-tauri/src/traework/mod.rs / uid.rs / commands.rs / device.rs / proc.rs / profile.rs / locate.rs / credentials.rs | 383 / 473 / 381 / 469 / 206 / 163 / 148 / 80（2026-09-21 复核） | device.rs 为 2026-09-21 新增的**设备标识层**（保存时按 `user_id` 对齐 + 切换时同步注册表 + 可注入的注册表出口，含单测）；credentials.rs 为积分与签到共用的凭据解析 |
+
+**棘轮冻结线（只降不升，2026-09-21 起执行）**：超限文件以下表实测值为各自临时上限，任何修改后的有效行数**不得高于冻结值**；收敛后按新实测值更新本表（逐次收紧）。确需新增逻辑时优先入新文件，或在原文件内同步删减/拆出等量以上代码。
+
+| 文件 | 冻结值（有效行） |
+|---|---|
+| src/App.css | ≤ 4240 |
+| src-tauri/src/lib.rs | ≤ 1500 |
+| src-tauri/src/account/account_manager.rs | ≤ 1400 |
+| src/App.tsx | ≤ 1030 |
+
+修改上述文件前先实测当前有效行作为基准：
+
+```powershell
+# 排除空行与行注释的有效行估算；块注释居多的文件（如 CSS）需人工再扣除块注释行
+(Get-Content <文件> | Where-Object { $_ -match '\S' -and $_ -notmatch '^\s*(//|#|\*|/\*|<!--)' }).Count
+```
 
 ## 5. 关键机制（改动前必读）
 
@@ -120,7 +137,9 @@ trae-cc/
 
 ### 5.4 浏览器登录（webview 凭据捕获）
 
-`start_browser_login` 打开指向 www.trae.com.cn/login 的 `trae-login` webview 并注入 `build_browser_login_script` 的 JS：hook fetch/XHR 请求体与 `HTMLInputElement.prototype.value` setter、递归扫描 shadowRoot/iframe 捕获输入，自动点击 Cookie 同意条；凭据 POST 到 warp 起的 `127.0.0.1:随机端口/callback`。整体 300 秒超时，多路 oneshot（取消 / 窗口关闭）竞争取消；凭据脱敏后落日志。另有 `browser_auto_login.rs`（邮箱密码自动填充）与 `open_pricing`（清 Cookie → 写入账号 Cookie → 跳转 pricing 页）两个独立注入点，勿混淆。
+`start_browser_login` 先用 `about:blank` 建 `trae-login` webview、清掉上一轮登录残留的 web 会话、再导航到 www.trae.com.cn/login（**顺序不可颠倒**：窗口一旦带着登录 URL 建起来，首次请求就已经把旧 Cookie 发出去了——这正是 2026-09-20 之前「打开登录窗口时还带着上次那个账号」的成因），随后注入 `build_browser_login_script` 的 JS：hook fetch/XHR 请求体与 `HTMLInputElement.prototype.value` setter、递归扫描 shadowRoot/iframe 捕获输入，自动点击 Cookie 同意条；凭据 POST 到 warp 起的 `127.0.0.1:随机端口/callback`。整体 300 秒超时，多路 oneshot（取消 / 窗口关闭）竞争取消；凭据脱敏后落日志。另有 `browser_auto_login.rs`（邮箱密码自动填充）与 `open_pricing`（清 Cookie → 写入账号 Cookie → 跳转 pricing 页）两个独立注入点，勿混淆。
+
+清理由 `clear_login_webview_session` 负责：先 `clear_all_browsing_data`，再按域显式删一遍 Cookie（`ClearBrowsingData` 异步落盘，显式删除覆盖它尚未生效的窗口期）。两个 webview 都未指定 `data_directory`，共用 `%LOCALAPPDATA%\com.hhj.trae-cc\EBWebView`，因此**只删 trae 域 Cookie、不做全量**——购买窗口依赖「清 Cookie → 写入目标账号 Cookie → 跳转」这条链路，全量删会顺带抹掉它的其它站点状态。
 
 ### 5.5 已移除的能力（历史沿革）
 
@@ -136,13 +155,15 @@ trae-cc/
 
 - **接口**：`api.trae.cn` 的 `/trae/api/v2/ug/checkin_credits/status`（查今日状态）与 `/claim`（领取），请求体 `{}`，头为 JWT + UA `Trae/0.1.52` + `X-User-Region: CN`，实现见 `api/checkin.rs`。**`claim` 必须带 `X-Device-Id`（实测缺省返回 9004「order parameters incorrect」）**；实测 `api.trae.com.cn` 未提供该接口（claim 返回 404），代码里的双端点回退仅用于网络容错。
 - **判定规则（勿改松）**：「已签到」判定须同时覆盖「已签到」与「已经签到」两种措辞——服务端 9095 原文为「当前设备今日已经签到」，而「已经签到」不含子串「已签到」，只匹配前者会误判为失败。签到按**设备维度**做每日去重（9095）：同一 X-Device-Id 当日已签即拒绝，提示「本设备今日已签到」而非失败。
-- **设备号隔离（`Account.device_id`，完全独立于 `machine_id`）**：`X-Device-Id` 用 `api/device_id.rs` 派生的 16 位设备号，`machine_id` 不再参与签到（避免「换签到设备号」连带改写 IDE 机器身份）。`device_id` 派生一次即落盘（sha256 域前缀 `trae-cc:device-id:v1:` + seed），启动回填**只补空值、绝不无条件重算**；`resolve_device_id` 三层回退（落盘值 → user_id 派生 → 内部 id 派生），**禁止固定种子兜底**（多个无 user_id 账号会撞号互踢 9095）。日志一律 `mask_device_id` 脱敏。右键菜单「重置设备标识」（`reset_account_device_id` 命令）换随机号 + 清冷却 + 清日期，用 `try_acquire` 防重入。
-- **冷却状态机（`api/checkin_guard.rs`）**：失败按数值 `code`/HTTP 状态码优先分类（`classify_error`），子串仅兜底（数值优先避免「消息里恰好含数字」的误判白等）。策略表：9074→10min、HTTP 429/404→60s、5xx/网络→2min、1005 权益不足→12h、401/1001→`i64::MAX`(reason=auth_expired)；9095/9004/活动未开放→不冷却。`until` 落盘与读取两侧都钳到**本地时区**当日 23:59:59（按 UTC 日界钳会钳到北京时间 07:59:59，「跨天必重试」破洞）；`i64::MAX` 是「需人工介入」哨兵、无时钟语义，前端按 `cooldown_reason` 渲染不读数值。Token 刷新/重新登录**仅清 auth_expired** 冷却。
+- **设备号隔离（`Account.device_id`，完全独立于 `machine_id`）**：`X-Device-Id` 用 `api/device_id.rs` 派生的 16 位设备号，`machine_id` 不再参与签到（避免「换签到设备号」连带改写 IDE 机器身份）。`device_id` 派生一次即落盘（sha256 域前缀 `trae-cc:device-id:v1:` + seed），启动回填**只补空值、绝不无条件重算**；`resolve_device_id` 三层回退（落盘值 → user_id 派生 → 内部 id 派生），**禁止固定种子兜底**（多个无 user_id 账号会撞号互踢 9095）。**TraeWork 账号的种子为 `traework:{uid}`（`types.rs::traework_device_seed`，upsert 落盘与启动回填共用）**——前缀把「两条记录是否撞同一设备号」变成结构性保证，不依赖「traecode 的 user_id 与 TraeWork 的 uid 是否同域」这一未验证事实（代价：同一真实账号的两条记录各有一个设备号，第二次 claim 由账号级去重挡成 already，多一次白请求）。日志一律 `mask_device_id` 脱敏。右键菜单「重置设备标识」（`reset_account_device_id` 命令）换随机号 + 清冷却 + 清日期，用 `try_acquire` 防重入。
+- **冷却状态机（`api/checkin_guard.rs`）**：失败按数值 `code`/HTTP 状态码优先分类（`classify_error`），子串仅兜底（数值优先避免「消息里恰好含数字」的误判白等）。策略表：9074→10min、HTTP 429/404→60s、5xx/网络→2min、1005 权益不足→12h、401/1001→`i64::MAX`(reason=auth_expired)、**TraeWork 凭据失效→12h(reason=credential_stale，见下条)**；9095/9004/活动未开放→不冷却。`until` 落盘与读取两侧都钳到**本地时区**当日 23:59:59（按 UTC 日界钳会钳到北京时间 07:59:59，「跨天必重试」破洞）；`i64::MAX` 是「需人工介入」哨兵、无时钟语义，前端按 `cooldown_reason` 渲染不读数值。Token 刷新/重新登录**仅清 auth_expired** 冷却。
 - **并发防重入**：三入口（`checkin_account` / `checkin_all_accounts` / `auto_checkin`）共用 `checkin_guard::try_acquire`（进程级 `static`，覆盖 `--silent` 自建 manager 的场景），持锁到全部结束；持锁期间手动签到返回「签到进行中」是有意取舍。`--silent` 与 GUI 双进程仍可能并发，不做跨进程文件锁（最坏得到 9095/9074，且有冷却兜底）。
 - **语义分层（勿破坏）**：冷却管「跨批次记忆」，批次内重试轮次管「批次内退避」。批次启动时**快照一次**已有冷却做准入、运行期间不重新准入；批次内失败**不落盘冷却**，全部轮次结束后 `apply_checkin_outcomes` **统一写盘一次**（成功/Already 写日期 + 失败项写冷却；同一账号重试成功时后一结果覆盖前一冷却）。
 - **自动签到批次重试（仅 `auto_checkin_pending`）**：第 1 轮全量 → 收集 `rate_limited` 账号 → 睡 30s → 第 2 轮 → 睡 90s → 第 3 轮 → 结束；等待次数与账号数无关（最坏 ≈ 2 分钟）、仅存在可重试项才 sleep。手动入口**不重试**（单轮结束即落盘）。
 - **自动签到（方案B）**：启动时（前端挂载后、以及 `--silent` 无头启动）调用 `auto_checkin` 命令，只处理 `last_checkin_date != 今天` 的账号；成功/已签到后写日期，避免一天多次开机重复请求；失败不写日期，下次启动自动重试。日期字段是 accounts.json 的兼容新增字段（`Account.last_checkin_date`）。
-- **手动入口**：右键菜单「签到」（`checkin_account`）、工具栏「全部签到」（`checkin_all_accounts`）。冷却账号返回 `cooldown` 状态（info 提示、不进失败汇总；自动签到维持静默）。**防双签红线：`checkin_with_token` 中 claim 前必先查 status**（重置设备号后该账号今日已真签到会被短路为 Already），该顺序禁止改动、禁止绕过。签到不触碰 IDE 文件与机器码，是纯网络请求。
+- **手动入口**：右键菜单「签到」（`checkin_account`）、工具栏「全部签到」（`checkin_all_accounts`，**只签 TraeCode**）、TraeWork 面板「签到 / 全部签到」（`checkin_account` / `traework_checkin_all`，只签 TraeWork）。冷却账号返回 `cooldown` 状态（info 提示、不进失败汇总；自动签到维持静默）。**防双签红线：`checkin_with_token` 中 claim 前必先查 status**（重置设备号后该账号今日已真签到会被短路为 Already），该顺序禁止改动、禁止绕过。签到不触碰 IDE 文件与机器码，是纯网络请求。
+- **按 app 分派凭据（勿改成「非 traework 就走 cookies」的单边判断）**：`list_accounts_for_checkin` 已**不再**按 `is_traecode` 过滤（过滤条件只剩 is_active 与日期），app 过滤落在 `checkin.rs`（`checkin_scope(manager, app: Option<&str>)` 锁外 `retain`）。TraeWork 账号的凭据由 `resolve_traework_credentials` **批次级**解析（一次 `spawn_blocking` + 一次 `Ctx::from_env`，不持 manager 锁；复用 `traework/credentials.rs::resolve_token` 的「当前槽读现场 → 主槽 → .bak」优先级，与积分查询共用，防两处漂移）。**无可达凭据记 `Skipped`（`CheckinState::Skipped`）**：不是失败（不进失败汇总）、也不是冷却（`collect_outcomes` 对它不写日期不写冷却），detail 透传「切换到 X 并重新保存」的可操作提示。`Ctx::from_env` 失败属环境级异常：全部 TraeWork 账号按 Skipped 跳过，traecode 照常签到。
+- **TraeWork 凭据失效 → `credential_stale`，绝不落 `auth_expired` 哨兵（阶段红线）**：TraeWork 账号 `cookies` 恒为空串，`refresh_token_via_cookies` 对它是恒空转，`process_account` 按 app 在刷新尝试之前就分派进 `traework_round`；401/1001 在其中被映射为 `CheckinError::CredentialStale`（12h、不可重试）。清除入口挂在「保存当前登录态」：`upsert_traework_account` 内调 `clear_cooldown_reason(account, REASON_CREDENTIAL_STALE)`（切换只是恢复旧凭据，重新保存才是新 token 落盘的时刻）。`i64::MAX` 哨兵无清除入口，落上去账号就永久卡死。
 
 ### 5.8 aha 层设备标识（`device_reset.rs`）
 
@@ -162,7 +183,20 @@ trae-cc/
 
 **白名单收窄不会自动给存量快照瘦身**：旧快照里仍躺着被排除的文件。`snapshot::prune_slot` 按白名单清理它们——判据是"恢复只读白名单路径"，故删它**不可能改变任何恢复结果**，只是丢掉不再需要的数据。由「修复槽位」触发。
 
-**切换编排（`traework/mod.rs::switch_to`，顺序即正确性）**：① 预检快照存在性（**此时还没杀客户端**，缺失就立刻失败，不破坏用户当前状态）→ ② `proc::stop` 三级关闭 → ③ 现场备份到保留槽 `last` → ④ 覆盖恢复 → ⑤ `verify_restore` 校验，失败则用 `last` 回滚 + 启动 + 报错 → ⑥ 写 `current_account.txt` → ⑦ 启动。`save_current_login` 同构（关客户端 → 备份到目标槽 → 写标记 → 启动），**保存成功后才把账号登记进账号库**（先登记后保存失败会留下「有账号无快照」的槽位，把失败推迟到更难解释的位置）。
+**切换编排（`traework/mod.rs::switch_to`，顺序即正确性）**：① 预检快照存在性（**此时还没杀客户端**，缺失就立刻失败，不破坏用户当前状态）→ ② `proc::stop` 三级关闭 → ③ 现场备份到保留槽 `last` → ④ 覆盖恢复 → ⑤ `verify_restore` 校验，失败则用 `last` 回滚 + **把注册表设备标识一并退回 `last` 的值** + 启动 + 报错 → ⑥ 写 `current_account.txt` → ⑦ **`device::apply_registry` 同步注册表设备标识**（必须在启动客户端**之前**：客户端启动时就把它读走了）→ ⑧ 启动。`save_current_login` 同构（关客户端 → 备份到目标槽 → 槽名校验 → **`device::normalize_on_save` 按 `user_id` 对齐设备标识**（目标值由命令层从账号库取出后传入，编排层不持账号库锁）→ 写标记 → 启动），**保存成功后才把账号登记进账号库**（先登记后保存失败会留下「有账号无快照」的槽位，把失败推迟到更难解释的位置）。
+
+**设备标识归属 `user_id`，不归属记录/app（`traework/device.rs` + `AccountManager::shared_machine_id`，2026-09-21 修正，勿退回）**：两个约束必须同时满足，且它们指向同一个答案——**不同真实账号 → 不同设备**（否则触发设备级限制「该设备绑定的账户数量已达上限」）；**同一真实账号 → 同一设备**（官方口径「同一台电脑同时登录 TraeCode 和 TraeWork 只算 1 台设备」，而账号库里同一账号本就有两条记录：`app` 不同、`user_id` 相同）。因此设备标识是 **`user_id` 的属性**：`AccountManager::shared_machine_id` 按 `user_id` 取值（**traecode 记录优先**——它一直是被写进注册表与 `machineid` 文件的那个值；无既有值则由 `derived_machine_id` 稳定派生，保证幂等、可反复回填），启动回填 `align_device_identities` 把同 `user_id` 的记录统一到同一值。
+
+**为什么这是修正而不是初版**：初版按「每个 TraeWork 账号一套独立标识」实现，只解决了第一条约束——同一账号在 traecode 侧 `caf505a4…`、traework 侧 `65e414a1…` 时服务端把它当**两台设备**，正是账号级风控（`Login Abnormality`）的成因方向。「一台设备多账号」与「一个账号多设备」是两条**相反**的风控特征，只拆不合并等于拆东墙补西墙。
+
+本模块两层：
+
+- **保存时对齐**（`normalize_on_save`，目标值由命令层从账号库取出后传入）：把槽位与现场改成该 `user_id` 的目标值（`machineid` + telemetry 三件套，规则复用 `machine::telemetry_ids`，**不得在本模块另写一套**）。拿不到共享值（账号还没进库）时才退化为「撞号则生成新值」。**必须同时写槽位与现场**——只写一处会被下一次保存/切换把旧值铺回来，现象是「每次都提示已对齐，账号之间始终不一致」。`aha` 只删不写（加密 blob，复用 `device_reset::reset_aha_device_id`）。**槽位被 `verify_slot_name` 归位时，调用方传入的共享值必须丢弃**（它属于另一个账号，写下去比不对齐更糟）。
+- **切换时写注册表**（`apply_registry`）：把槽位 `machineid` 写入 `MachineGuid` 并**读回验证**（`set` 返回成功 ≠ 生效，权限/策略会让它静默落空）。回滚路径必须写回 `last` 的值，否则现场已退回而注册表停在中途的失败目标上，本地两层标识互相矛盾。
+
+注册表读写抽成 `RegistryAccess` trait 注入：写 `HKLM` 是系统级副作用，**测试绝不能碰真实注册表**，注入后「读不到标识→跳过」「写失败→只告警」「读回不一致→判失败」三条分支都能单测。撞号判定用 `Fingerprint::clashes_with`（**任一非空字段相同即算撞号**，偏安全方向），并**排除保留槽 `last`**（否则每个账号恒被判为撞号、每次保存都重算，反而制造「设备频繁轮换」这个风控强特征）。**边界：不做批量重置**——对齐只在用户主动点「保存当前登录态」时对该槽位生效；**风控冷却期内不要执行**（改设备身份可能加重处罚，见 §7 限制 12）。界面把「注册表 / 现场 / 各槽位」三处值一并列出（`traework_overview` 的 `registry_machine_id` / `live_machine_id` 与每槽位的 `machine_id` / `shares_device_with`），隔离是否生效**必须可见可对账**。
+
+**【2026-09-21 实测更正】`telemetry.machineId` 并非 `sha256(machineid)`**（两组对照全对不上：算得 `84b55d30…` 而槽位里是 `0513f181…`），该字段由客户端自行维护，故改写它只是**尽力而为的兜底**、可能被客户端覆盖回自己的算法值——**判定隔离是否生效请看 `machineid` 与注册表这两层，不要拿 telemetry 说事**。附注：这也顺带解掉了 `doc/设备身份隔离调研.md` §4.1 遗留的未确证项。另：`Login Abnormality` 弹窗给出的申诉邮箱是 **`feedback@mail.trae.cn`**（国内），不是 `.ai`。
 
 **三条不可省的工程约束**（每条都对应一次事故，见 doc/TraeWork账号切换计划.md §2.6）：
 
@@ -178,11 +212,13 @@ trae-cc/
 
 两道防线（配合上面那条才完整）：① **备份后自校验槽名**（`verify_slot_name`）——以快照内部解出的 userId 为最终裁决，不符即改名归位，判据不依赖任何外部字段时序；② **切换前不符即拒绝**，避免"点切换到 X 实际登录成 Y"。`account_id_from_storage()` / `slot_account_id()` 让"实时现场"与"快照内容"共用同一判据。
 
-**命令（9 个，注册在 lib.rs，实现均在 `traework/commands.rs`）**：`traework_overview`（当前账号/进程/各槽快照状态/孤儿槽）、`traework_discover`（uid 判定）、`traework_save_current_login`、`traework_switch_account`、`traework_delete_snapshot`、`traework_remove_account`（删账号记录并连同磁盘快照，与「删除快照」的区别是后者只删文件、账号仍在列表里）、`traework_set_path`、`traework_scan_path`、**`traework_reconcile`（修复槽位：错位快照按真实账号改名归位 + 登记缺失账号 + 按白名单清理存量快照，目标槽位已存在时拒绝覆盖）**。全部把阻塞工作（`tasklist` / `std::fs`）放进 `spawn_blocking`，锁只在取账号信息时短暂持有。孤儿槽/错位槽的入口就是这个「修复槽位」按钮，没有别的路径。
+**命令（10 个，注册在 lib.rs，实现均在 `traework/commands.rs`）**：`traework_overview`（当前账号/进程/各槽快照状态/孤儿槽）、`traework_discover`（uid 判定）、`traework_credits`（单账号积分余额，凭据来源见下段）、`traework_save_current_login`、`traework_switch_account`、`traework_delete_snapshot`、`traework_remove_account`（删账号记录并连同磁盘快照，与「删除快照」的区别是后者只删文件、账号仍在列表里）、`traework_set_path`、`traework_scan_path`、**`traework_reconcile`（修复槽位：错位快照按真实账号改名归位 + 登记缺失账号 + 按白名单清理存量快照，目标槽位已存在时拒绝覆盖）**。另有本地命令 `traework_checkin_all`（lib.rs，转发 `checkin::checkin_all_traework`）与单账号复用的 `checkin_account`。全部把阻塞工作（`tasklist` / `std::fs`）放进 `spawn_blocking`，锁只在取账号信息时短暂持有。孤儿槽/错位槽的入口就是这个「修复槽位」按钮，没有别的路径。
+
+**凭据与积分、签到（2026-09-20 新增，优先级逻辑收敛在 `traework/credentials.rs::resolve_token`）**：`iCubeAuthInfo://icube.cloudide` 解出的 JSON 除 `userId` 与展示字段外，还有 `token` / `refreshToken` / `expiredAt` / `refreshExpiredAt`。`traework/uid.rs` 已把「读文件 + 解 auth 密文」抽成 `auth_plaintext()`，供 `profile_from_storage`（身份）与 `credentials_from_storage`（凭据）共用——这两处此前各写一遍解密，`iCubeAuthInfo` 由明文改密文时就漂移过一次。**凭据只经 `TraeworkCredentials` 传递，且刻意不 derive `Serialize`**：`AccountProfile` 已经 derive 了它，凭据若挂上去，将来任何一次「顺手返回 profile」都会把 token 漏给前端；同理禁止落日志、禁止写进 accounts.json。取凭据的优先级是**当前账号读实时现场 → 否则读快照主槽 → 主槽缺失回退 `.bak`**（`credentials.rs::resolve_token`，积分查询与签到共用同一份实现）：客户端会用 refreshToken 换发新凭据并**只写回现场**，对当前账号读快照只会拿到一份必然过期的旧 token。实测该 token 被 CN 端点直接接受（`api.trae.cn/trae/api/v2/ug/checkin_credits/status` 200；**`claim` 亦实测生效**，2026-09-20 探针：头 A `Trae/0.1.52` 一次通过、无需参考实现的 VSCode UA；`api.trae.com.cn/trae/api/v2/pay/ide_user_ent_usage` 均 200），所以**积分显示与签到都不需要新的认证链路**。已知边界：access 只有 14 天，快照放久了必然过期——签到侧落 `credential_stale` 冷却（见 §5.7）、积分查询报鉴权失败，两者都提示「切过去重新保存」；用 `refreshToken` 主动续期的端点**未找到**（客户端 JS 已压缩）。界面只在账号名后显示「剩余 / 总额」，通用与 Work 专属的分类明细挂在 `title`。
 
 **前端**：独立侧边栏页「TraeWork」（`src/components/TraeworkPanel.tsx` + 同名 CSS）。账号管理页/统计页/批量操作**只处理 traecode 账号**（`isTraeworkAccount` 过滤），两套切换机制相反，混在一个列表里会让用户按同一预期连点。**进度反馈刻意不用 Tauri 事件流**：本仓库此前没有任何 `emit` 用法，为单一功能引入事件通道会带来订阅时机/事件丢失一整套新问题；当前做法是进行中遮罩 + 已耗时秒表 + 结果里回传分步日志（`StepCollector`），已满足「明确进度、防连点」的原始诉求。
 
-**traecode 侧准入判据**：`Account.is_traecode()` 已加到 `list_accounts_for_checkin`、`checkin_one_account`、`AccountManager::refresh_token`、`get_account_usage` 四处。**新增任何遍历全量账号的 traecode 链路时，必须同样先过滤**，否则 TraeWork 账号会产生一串误导性失败。
+**traecode 侧准入判据**：`Account.is_traecode()` 保留在 `AccountManager::refresh_token`、`get_account_usage` 两处。签到侧已改为**按 app 分派**（TraeWork 走快照凭据、无凭据记 Skipped，见 §5.7），不再用 `is_traecode` 拒绝。**新增任何遍历全量账号的 traecode 链路时，必须先想清楚 TraeWork 账号该走哪条路（分派或过滤），不能让它们落到凭据为空的失败路径上。**
 
 ### 5.10 已注册但无 UI 入口的命令（清单，避免重复推导）
 
@@ -216,6 +252,20 @@ trae-cc/
 | `privacy_auto_enable` | `switch_account` 命令层（lib.rs），决定是否走「启动 IDE → 写隐私模式 → 二次重启」 |
 | `auto_start_enabled` | `update_settings` 写 HKCU Run；启动时用落盘值重写一次（注册表写失败可自愈，故允许降级为日志警告） |
 | `theme` | `ThemeSwitcher`（经 `App.tsx` 透传到 `Sidebar`）。存储已从 `localStorage` 迁入 settings.json；`theme` 为 `null` 表示从未设置过，前端据此从旧的 `trae_theme_v1` 迁移一次 |
+
+### 5.12 窗口几何持久化（`src/window_state.rs`，2026-09-20 自研）
+
+记录主窗口的尺寸/位置/最大化状态，落点 `%APPDATA%\hhj\trae-cc\config\window_state.json`（与 settings.json 同目录）。两个接入点都在 lib.rs：`setup` 里 `restore`（先恢复再 `show`）、`CloseRequested` 里 `save`（紧接着 `api.prevent_close()` + `process::exit(0)`）。
+
+**不要改回 `tauri-plugin-window-state`（已试过并移除，根因如下）**：
+- 插件的落盘挂在 `RunEvent::Exit` 上，而本应用主窗口关闭时是 `std::process::exit(0)` 直接终止进程 —— `Exit` 事件**永不触发**，自动保存等于不存在；
+- 手动调它的 `save_window_state()` 试过一版：只返回一个被 `let _` 吞掉的 `Result`，磁盘上始终没有状态文件，也**没有任何观测点**能说明失败在哪一步（实测 `%APPDATA%\com.hhj.trae-cc` 目录都没被创建）。不把功能建立在查不出原因的第三方路径上。
+
+自研实现的两条关键约定（都有单测覆盖）：
+- **最大化时只翻转 `maximized` 标志，不覆盖尺寸/位置**：最大化状态下 `outer_position`/`inner_size` 报的是屏幕尺寸，原样存下来会让用户取消最大化后得到一个满屏大小的窗口；首次运行即最大化时存 0 尺寸表示「只恢复最大化，不动尺寸/位置」。
+- **位置只在落在某个显示器内时才恢复**（`position_visible` 按窗口左上角判定，标题栏在屏外等于窗口丢了）：外接屏拔掉后旧位置可能指向不存在的屏幕；拿不到显示器列表时放行（宁可按记录恢复，也不要因一次枚举失败丢位置）。尺寸不受此限制，照常恢复。
+
+坐标为物理像素（`outer_position` / `inner_size`），跨 DPI 缩放变化时按物理尺寸恢复，属已知取舍。验证方式（无需手拖窗口）：预写一份特征几何到该 json → 启动 → 用 Win32 `GetWindowRect` 量窗口矩形比对；或先跑一次再关闭，核对文件里的数值与实际几何一致。
 
 ## 6. 编码约定
 
@@ -265,7 +315,7 @@ trae-cc/
 9. **TraeWork 快照里的 token 可能过期**：切换恢复的是「保存那一刻的登录态」，若期间账号在别处重新登录导致 token 失效，切过去仍要重新登录。计划中的兜底（恢复后用账号库新 token 重写 `storage.json`）**尚未实现**——需要先有一条可信的 token 来源，TraeWork 侧的凭据目前只存在于 vscdb 与密文里。
 10. **TraeWork 快照体积未实测**：白名单含 `state.vscdb`（本机 1.2MB × 2）与两个 `Partitions\*` 目录，单槽预估 3–8MB；`doc/TraeWork账号切换计划.md` §5 风险 3 的估算**待首次真实快照生成后替换**。`Partitions\*` 两项参考实现自己也标注未完全验证，先纳入跑通，若体积不可接受再按「切换前后 mtime/大小是否变化」取舍。
 11. **TraeWork 的 uid 证据链只在本机单账号场景验证过**：`icube_gtm.users` 多账号并存时的消歧（vscdb per-uid 键名计数）已写但**未在真实双账号环境实测**——单测只覆盖了构造数据。多账号场景下若出现「置信度不足」提示，属设计内的保守行为，不是 bug。
-12. **TraeWork 无隐私模式与机器码联动**：未调研 TraeWork 是否有类似 traecode 的隐私模式键；`machineid` 随快照走（一账号一设备），因此**不提供**「重置 TraeWork 机器码」入口。切 TraeWork 不改注册表 MachineGuid（那是 traecode 的行为）。\n13. **TraeWork 存量快照不会自动瘦身**：白名单收窄只影响新快照，旧快照里仍躺着被排除的缓存（实测约 487MB/份，叠加 `.bak` 翻倍）。需用户点一次「修复槽位」才清理——刻意不做自动清理，因为「删除快照内容」这种破坏性动作不应在用户没察觉时发生。\n14. **uid 兜底路径仍有滞后风险**：若上游改了 auth 字段格式导致解密失败，判定会退回 `icube_gtm.users`，而该字段对「换号登录」滞后（正是 2026-09-20 覆盖事故的成因）。此时「备份后槽名自校验」会用同一个退化判据，防线失效。**判断信号**：面板「识别结果」里来源不是「已解密登录态确认」而是「来自 icube_gtm.users」时即处于该状态，此时新增账号前建议先核对客户端里实际登录的是谁。
+12. **TraeWork 设备标识已按 `user_id` 补齐（跨应用统一），存量不一致需逐个重新保存**（2026-09-21 两次重写本条：上一版的「`machineid` 随快照走 = 一账号一设备」与「切 TraeWork 不改注册表 `MachineGuid`」均被实测推翻；本轮再修正为「设备标识归属 `user_id`，不归属记录/app」）。对齐只在用户主动点「保存当前登录态」时对该槽位生效，**刻意不做批量重置**（边界见 §5.9）；存量账号若仍显示「设备标识共用」，切到该账号重新保存一次即可。固有限制：① 注册表 `MachineGuid` 是**全局单值**，反映「最近一次切换的账号」——同一真实账号跨应用共用同一值（正是本轮要的效果），但**两个不同账号仍会互相覆盖**，两应用同时使用时无法同时成立，属方案固有约束而非缺陷；② 写 `HKLM` 需管理员权限，非管理员时该层降级为 `warn`（界面显示注册表与现场不一致）；③ **风控冷却期内不要执行对齐**——账号被标记（`Login Abnormality`）时改设备身份可能加重处罚。**仍未提供**「重置 TraeWork 机器码」入口：改标识的正当入口是「保存当前登录态」的按 `user_id` 对齐，不是手动轮换。TraeWork 是否有隐私模式键仍未调研。\n13. **TraeWork 存量快照不会自动瘦身**：白名单收窄只影响新快照，旧快照里仍躺着被排除的缓存（实测约 487MB/份，叠加 `.bak` 翻倍）。需用户点一次「修复槽位」才清理——刻意不做自动清理，因为「删除快照内容」这种破坏性动作不应在用户没察觉时发生。\n14. **uid 兜底路径仍有滞后风险**：若上游改了 auth 字段格式导致解密失败，判定会退回 `icube_gtm.users`，而该字段对「换号登录」滞后（正是 2026-09-20 覆盖事故的成因）。此时「备份后槽名自校验」会用同一个退化判据，防线失效。**判断信号**：面板「识别结果」里来源不是「已解密登录态确认」而是「来自 icube_gtm.users」时即处于该状态，此时新增账号前建议先核对客户端里实际登录的是谁。
 
 ## 8. 安全与边界（不要做的事）
 
